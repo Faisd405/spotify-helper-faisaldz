@@ -154,6 +154,7 @@ async function showTrack(t) {
   try {
     // 1) this device  2) shared Firebase cache  3) LRCLIB + romanize here
     let found = JSON.parse(localStorage.getItem(`lyrics:${id}`));
+    let noRomaji = false;
     if (!found && fb) {
       status("Mengambil lirik…");
       // Listeners wait a bit: the host is likely romanizing this song right now.
@@ -169,15 +170,23 @@ async function showTrack(t) {
 
       const lang = detectLang(found.map((l) => l.text).join("\n"));
       if (lang === "ja") status("Memuat kamus Jepang (pertama kali agak lama)…");
-      for (const line of found) line.roman = await romanize(line.text, lang);
+      try {
+        for (const line of found) line.roman = await romanize(line.text, lang);
+      } catch (err) {
+        // Show the original text now, but don't cache it: lyrics without romaji would stick
+        // (the shared cache is write-once), and a later play should retry.
+        console.error(err);
+        for (const line of found) line.roman = "";
+        noRomaji = true;
+      }
       if (id !== lastId) return;
-      cacheLyrics(id, found);
+      if (!noRomaji) cacheLyrics(id, found);
     }
     // Host shares every song it shows; write-once rules reject songs already cached.
-    if (room) fb.saveSharedLyrics(id, found).catch(() => {});
+    if (room && !noRomaji) fb.saveSharedLyrics(id, found).catch(() => {});
 
     lyrics = found;
-    status("");
+    status(noRomaji ? "Romaji gagal dimuat, menampilkan lirik asli. Coba putar ulang lagunya nanti." : "");
     render();
   } catch (err) {
     console.error(err);

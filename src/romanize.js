@@ -13,6 +13,15 @@ export function detectLang(text) {
   return null;
 }
 
+const DICT_URL = "https://cdn.jsdelivr.net/npm/@sglkc/kuromoji@1.0.1/dict/";
+// kuromoji path.join()s dictPath + file name, which collapses "https://cdn…" into "https:/cdn…".
+// On an https page the browser reads that as a same-origin path (404 on Vercel); http pages happened to work.
+// Restore the slash. Only the malformed "https:/x" form is touched, which nothing else produces.
+// (Self-hosting the dictionary instead breaks: dev servers add Content-Encoding: gzip to .gz files,
+// and kuromoji gunzips them a second time.)
+const realFetch = window.fetch;
+window.fetch = (url, ...rest) =>
+  realFetch(typeof url === "string" ? url.replace(/^https:\/(?!\/)/, "https://") : url, ...rest);
 let kuroshiro;
 function getKuroshiro() {
   // Lazy: the kuromoji dictionary is ~12 MB, only fetch it for Japanese songs.
@@ -22,9 +31,14 @@ function getKuroshiro() {
       import("@sglkc/kuroshiro-analyzer-kuromoji"),
     ]);
     const k = new Kuroshiro();
-    await k.init(new KuromojiAnalyzer({ dictPath: "https://cdn.jsdelivr.net/npm/@sglkc/kuromoji@1.0.1/dict/" }));
+    // kuromoji never calls back if a file fails to load, hence the timeout.
+    await Promise.race([
+      k.init(new KuromojiAnalyzer({ dictPath: DICT_URL })),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("Kamus Jepang gagal dimuat")), 60_000)),
+    ]);
     return k;
   })();
+  kuroshiro.catch(() => (kuroshiro = null)); // let the next song retry
   return kuroshiro;
 }
 
