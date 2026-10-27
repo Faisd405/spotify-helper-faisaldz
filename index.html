@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#121212" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" href="icon.svg" />
+  <title>Romaji Karaoke</title>
+  <style>
+    /* Defaults; overridden at runtime from the settings form (see applyStyle in main.js). */
+    :root { --bg: #121212; --text: #ffffff; --active: #1db954; --roman-size: 1.5rem; --orig-size: 1rem; --show-orig: block; }
+    body { margin: 0; background: var(--bg); color: var(--text); font-family: system-ui, sans-serif; }
+    header { position: sticky; top: 0; z-index: 1; background: var(--bg); padding: 12px 16px; display: flex; gap: 8px; align-items: center; }
+    #title { flex: 1; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    button { background: #1db954; color: #000; border: 0; border-radius: 999px; padding: 10px 20px; font-weight: 700; font-size: 1rem; }
+    #logout { background: #333; color: #fff; padding: 6px 12px; font-size: .8rem; }
+    #status { padding: 0 16px; opacity: .7; }
+    ol { list-style: none; margin: 0; padding: 40vh 16px; }
+    li { padding: 10px 0; opacity: .35; transition: opacity .2s, color .2s; }
+    li.active { opacity: 1; color: var(--active); }
+    p { margin: 0; }
+    .roman { font-size: var(--roman-size); font-weight: 700; }
+    .orig { font-size: var(--orig-size); opacity: .75; margin-top: 4px; display: var(--show-orig); }
+
+    #settings summary { list-style: none; cursor: pointer; font-size: 1.3rem; padding: 4px 8px; }
+    #settings summary::-webkit-details-marker { display: none; }
+    #settings form { position: absolute; right: 16px; top: 56px; background: #282828; color: #fff; border-radius: 12px; padding: 16px; display: grid; gap: 12px; width: min(280px, calc(100vw - 64px)); box-shadow: 0 8px 24px #0008; }
+    #settings label { display: grid; gap: 4px; font-size: .9rem; }
+    #settings label.row { display: flex; align-items: center; gap: 8px; }
+    #settings input[type="color"] { width: 100%; height: 32px; border: 0; background: none; }
+    #settings input[type="number"] { padding: 6px; border-radius: 6px; border: 0; }
+    #settings button { background: #333; color: #fff; padding: 8px; font-size: .9rem; }
+  </style>
+</head>
+<body>
+  <header>
+    <div id="title">Romaji Karaoke</div>
+    <button id="login" hidden>Login Spotify</button>
+    <button id="logout" hidden>Logout</button>
+    <details id="settings">
+      <summary aria-label="Pengaturan tampilan">⚙</summary>
+      <!-- Each input's name maps to a CSS variable --name; data-unit is appended to the value. -->
+      <form>
+        <label>Ukuran romaji <input type="range" name="roman-size" data-unit="rem" min="1" max="4" step="0.1" value="1.5" /></label>
+        <label>Ukuran teks asli <input type="range" name="orig-size" data-unit="rem" min="0.6" max="3" step="0.1" value="1" /></label>
+        <label class="row"><input type="checkbox" name="show-orig" checked /> Tampilkan teks asli</label>
+        <label>Warna baris aktif <input type="color" name="active" value="#1db954" /></label>
+        <label>Warna teks <input type="color" name="text" value="#ffffff" /></label>
+        <label>Warna latar <input type="color" name="bg" value="#121212" /></label>
+        <label>Offset sinkron (ms, lebih besar = lebih awal) <input type="number" name="offset" step="50" value="300" /></label>
+        <button type="reset">Reset ke default</button>
+      </form>
+    </details>
+  </header>
+  <p id="status"></p>
+  <ol id="lyrics"></ol>
+  <script type="module" src="./src/main.js"></script>
+</body>
+</html>
