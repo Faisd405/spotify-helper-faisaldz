@@ -1,7 +1,9 @@
 const CLIENT_ID = import.meta.env.VITE_SPOTIFY_CLIENT_ID;
 // Must match the dashboard exactly; the dashboard strips the trailing "/" from a bare origin.
 const REDIRECT_URI = location.pathname === "/" ? location.origin : location.origin + location.pathname;
-const SCOPES = "user-read-currently-playing";
+// user-modify-playback-state: adding listener requests to the host's queue. Hosts who logged in before
+// this scope existed get a 403 on queue calls and must log out and in once.
+const SCOPES = "user-read-currently-playing user-modify-playback-state";
 
 function randomString(len = 64) {
   const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
@@ -70,7 +72,20 @@ async function getToken() {
 }
 
 let pausedUntil = 0; // set by a 429; no Spotify calls until then
-export const isPaused = () => document.hidden || Date.now() < pausedUntil;
+export const isRateLimited = () => Date.now() < pausedUntil;
+
+// Spotify explains 403s in the body ("User not registered in the Developer Dashboard", "Premium required",
+// missing scope…); surface that text, since the status alone doesn't say what to fix.
+async function spotifyError(res) {
+  const msg = await res.json().then((j) => j.error?.message ?? j.error_description ?? "", () => "");
+  if (res.status === 403) {
+    pausedUntil = Date.now() + 60_000; // retrying every 3 s won't change the answer
+    if (/not registered/i.test(msg)) return new Error("Spotify 403: akun ini belum didaftarkan di Developer Dashboard (User Management).");
+    if (/premium/i.test(msg)) return new Error("Spotify 403: butuh Spotify Premium (pemilik app dan akun ini).");
+    if (/scope/i.test(msg)) return new Error("Spotify 403: izin kurang. Logout lalu login lagi.");
+  }
+  return new Error(`Spotify error ${res.status}${msg ? `: ${msg}` : ""}`);
+}
 
 export async function getNowPlaying() {
   const res = await fetch("https://api.spotify.com/v1/me/player/currently-playing", {
@@ -83,7 +98,7 @@ export async function getNowPlaying() {
     throw new Error(`Rate limit Spotify, jeda ${wait} detik`);
   }
   if (res.status === 401) localStorage.setItem("expires_at", "0"); // force refresh on next poll
-  if (!res.ok) throw new Error(`Spotify error ${res.status}`);
+  if (!res.ok) throw await spotifyError(res);
   const data = await res.json();
   if (!data.item || data.currently_playing_type !== "track") return null;
   return {
@@ -97,3 +112,28 @@ export async function getNowPlaying() {
     fetchedAt: Date.now(),
   };
 }
+
+async function api(path, init = {}) {
+  const res = await fetch(`https://api.spotify.com/v1${path}`, {
+    ...init,
+    headers: { Authorization: `Bearer ${await getToken()}` },
+  });
+  if (res.status === 429) throw new Error("Rate limit Spotify, coba lagi sebentar.");
+  if (res.status === 404 && path.startsWith("/me/player")) throw new Error("Tidak ada device Spotify yang aktif. Putar sesuatu dulu.");
+  if (!res.ok) throw await spotifyError(res);
+  const text = await res.text(); // queue answers 200/204 with an empty body
+  return text ? JSON.parse(text) : null;
+}
+
+const toTrack = (t) => ({ id: t.id, title: t.name, artist: t.artists[0].name });
+
+// A listener request is free text or a Spotify track link/URI.
+export async function resolveTrack(text) {
+  const id = text.match(/track[/:]([A-Za-z0-9]{22})/)?.[1];
+  if (id) return toTrack(await api(`/tracks/${id}`));
+  const found = await api(`/search?${new URLSearchParams({ q: text, type: "track", limit: "1" })}`);
+  const t = found?.tracks?.items?.[0];
+  return t ? toTrack(t) : null;
+}
+
+export const addToQueue = (id) => api(`/me/player/queue?${new URLSearchParams({ uri: `spotify:track:${id}` })}`, { method: "POST" });

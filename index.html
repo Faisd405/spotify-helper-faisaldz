@@ -12,10 +12,31 @@
     :root { --bg: #121212; --text: #ffffff; --active: #1db954; --roman-size: 1.5rem; --orig-size: 1rem; --show-orig: block; }
     body { margin: 0; background: var(--bg); color: var(--text); font-family: system-ui, sans-serif; }
     header { position: sticky; top: 0; z-index: 1; background: var(--bg); padding: 12px 16px; display: flex; gap: 8px; align-items: center; }
-    #title { flex: 1; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #now { flex: 1; min-width: 0; display: grid; gap: 4px; }
+    #title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #clock { display: flex; align-items: center; gap: 8px; font-size: .8rem; opacity: .8; font-variant-numeric: tabular-nums; }
+    #clock[hidden] { display: none; }
+    #clock progress { flex: 1; height: 4px; appearance: none; border: 0; border-radius: 2px; background: #ffffff33; }
+    #clock progress::-webkit-progress-bar { background: #ffffff33; border-radius: 2px; }
+    #clock progress::-webkit-progress-value { background: var(--active); border-radius: 2px; }
+    #clock progress::-moz-progress-bar { background: var(--active); border-radius: 2px; }
     button { background: #1db954; color: #000; border: 0; border-radius: 999px; padding: 10px 20px; font-weight: 700; font-size: 1rem; }
     #logout, #room, #room-share { background: #333; color: #fff; padding: 6px 12px; font-size: .8rem; }
     #room-info { padding: 0 16px; }
+    .panel { margin: 0 16px 8px; padding: 8px 12px; background: #ffffff10; border-radius: 10px; }
+    .panel[hidden] { display: none; }
+    .panel summary { cursor: pointer; font-weight: 600; }
+    .panel h4 { margin: 10px 0 4px; font-size: .85rem; opacity: .7; }
+    .panel ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+    .panel li { display: flex; align-items: center; gap: 8px; font-size: .9rem; }
+    .panel li span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+    .panel li small { opacity: .6; }
+    .panel li button, #request-form button { padding: 4px 10px; font-size: .8rem; }
+    .panel li button.secondary { background: #333; color: #fff; }
+    .panel label { display: grid; gap: 4px; margin-top: 8px; font-size: .85rem; }
+    .panel input { padding: 8px; border-radius: 6px; border: 0; }
+    #request-form { display: flex; gap: 6px; margin-top: 8px; }
+    #request-form input { flex: 1; }
     #player { position: sticky; top: 56px; z-index: 1; padding: 0 16px 8px; background: var(--bg); display: grid; gap: 8px; }
     #player[hidden] { display: none; }
     #status { padding: 0 16px; opacity: .7; }
@@ -38,7 +59,10 @@
 </head>
 <body>
   <header>
-    <div id="title">Romaji Karaoke</div>
+    <div id="now">
+      <div id="title">Romaji Karaoke</div>
+      <div id="clock" hidden><span id="elapsed">0:00</span><progress id="progress" max="1" value="0"></progress><span id="length">0:00</span></div>
+    </div>
     <button id="login" hidden>Login Spotify</button>
     <button id="room" hidden>Buat Room</button>
     <button id="logout" hidden>Logout</button>
@@ -53,6 +77,7 @@
         <label>Warna teks <input type="color" name="text" value="#ffffff" /></label>
         <label>Warna latar <input type="color" name="bg" value="#121212" /></label>
         <label>Offset sinkron (ms, lebih besar = lebih awal) <input type="number" name="offset" step="50" value="300" /></label>
+        <label class="row"><input type="checkbox" name="keep-alive" checked /> Host: tetap kirim update saat tab di background</label>
         <button type="reset">Reset ke default</button>
       </form>
     </details>
@@ -62,6 +87,23 @@
     <div id="embed"></div>
     <button id="join" hidden>▶ Gabung &amp; putar</button>
   </section>
+  <!-- Host: who's listening + song requests. Listener: name + request form. Filled by main.js. -->
+  <details id="host-panel" class="panel" hidden>
+    <summary id="host-summary">Room</summary>
+    <h4>Pendengar</h4>
+    <ul id="listener-list"></ul>
+    <h4>Request lagu</h4>
+    <ul id="host-requests"></ul>
+  </details>
+  <details id="listener-panel" class="panel" hidden>
+    <summary id="listener-summary">Request lagu</summary>
+    <label>Nama Anda <input id="listener-name" maxlength="40" placeholder="Pendengar" /></label>
+    <form id="request-form">
+      <input id="request-text" maxlength="200" required placeholder="Judul lagu atau link Spotify" />
+      <button>Request</button>
+    </form>
+    <ul id="listener-requests"></ul>
+  </details>
   <p id="status"></p>
   <ol id="lyrics"></ol>
   <script type="module" src="./src/main.js"></script>

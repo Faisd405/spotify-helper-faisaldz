@@ -37,4 +37,26 @@ Setup (once, host only), at https://console.firebase.google.com:
 4. Project settings → Your apps → add a Web app, then copy its config into the `VITE_FIREBASE_*` values in `.env`.
 
 Usage: tap **Buat Room** → **Bagikan link**. Friends open the link and tap **Gabung & putar**.
-Keep the app open on the host's phone; it stops sending updates while it's in the background.
+
+- **Background:** ⚙ → "Host: tetap kirim update saat tab di background" (on by default) keeps a desktop host
+  publishing while its tab is hidden. Phones freeze background tabs, so keep the app open there.
+- **Requests:** listeners request a song by title or Spotify link. The host's app looks it up, the host taps
+  **+ Queue** to add it to their Spotify queue, and the request disappears once the song plays. Hosts who
+  logged in before this feature must log out and in once (new `user-modify-playback-state` permission).
+- **Listeners:** the room panel lists everyone connected (name + web/YouTube/Spotify) and lets the host
+  **Kick** someone. Kicks are enforced by the database rules (no more room reads, heartbeats or requests).
+  After changing `database.rules.json`, paste it into the Firebase Rules tab again.
+
+## Browser extension (Chrome/Edge, desktop)
+
+`extension/` lets a listener follow a room on **YouTube / YouTube Music** or the **Spotify web player**
+instead of the in-page embed. No API key: it reads YouTube's own search page to find the video.
+
+1. Copy `extension/config.example.js` to `extension/config.js` and fill in the values from `.env`.
+   Then open `chrome://extensions`, enable **Developer mode**, click **Load unpacked**, and pick the `extension` folder.
+2. Open youtube.com, music.youtube.com or open.spotify.com in a tab.
+3. Click the extension icon, paste the room code or link, and press **Gabung di tab ini**.
+
+The YouTube side drives the page's `<video>` element and waits out ads. The Spotify web player side clicks
+Spotify's own controls, so it is experimental and breaks if Spotify changes its markup.
+Check the search picker with `node extension/check-search.mjs`.

@@ -2,9 +2,37 @@
   "rules": {
     "rooms": {
       "$code": {
-        ".read": true,
+        ".read": "auth != null && !root.child('kicked').child($code).child(auth.uid).exists()",
         ".write": "auth != null && (!data.exists() || data.child('hostUid').val() === auth.uid)",
         ".validate": "newData.child('hostUid').val() === auth.uid"
+      }
+    },
+    "listeners": {
+      "$code": {
+        ".read": "auth != null && root.child('rooms').child($code).child('hostUid').val() === auth.uid",
+        ".write": "auth != null && root.child('rooms').child($code).child('hostUid').val() === auth.uid",
+        "$uid": {
+          ".write": "auth != null && auth.uid === $uid && !root.child('kicked').child($code).child($uid).exists()",
+          ".validate": "newData.hasChildren(['name', 'via', 'at']) && newData.child('name').isString() && newData.child('name').val().length <= 40 && newData.child('via').isString() && newData.child('via').val().length <= 20 && newData.child('at').isNumber()"
+        }
+      }
+    },
+    "kicked": {
+      "$code": {
+        ".write": "auth != null && root.child('rooms').child($code).child('hostUid').val() === auth.uid",
+        "$uid": {
+          ".read": "auth != null && (auth.uid === $uid || root.child('rooms').child($code).child('hostUid').val() === auth.uid)"
+        }
+      }
+    },
+    "requests": {
+      "$code": {
+        ".read": "auth != null && !root.child('kicked').child($code).child(auth.uid).exists()",
+        ".write": "auth != null && root.child('rooms').child($code).child('hostUid').val() === auth.uid",
+        "$req": {
+          ".write": "auth != null && !root.child('kicked').child($code).child(auth.uid).exists() && ((!data.exists() && newData.child('by').val() === auth.uid) || (data.child('by').val() === auth.uid && !newData.exists()))",
+          ".validate": "newData.hasChildren(['by', 'name', 'text', 'at']) && newData.child('text').isString() && newData.child('text').val().length <= 200 && newData.child('name').isString() && newData.child('name').val().length <= 40"
+        }
       }
     },
     "lyrics": {

@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <style>
+    body { width: 280px; margin: 0; padding: 12px; background: #121212; color: #fff; font: 14px system-ui, sans-serif; display: grid; gap: 8px; }
+    input { padding: 8px; border-radius: 6px; border: 0; }
+    .row { display: flex; gap: 6px; }
+    button { flex: 1; padding: 8px; border: 0; border-radius: 999px; font-weight: 700; background: #1db954; color: #000; }
+    #leave { background: #333; color: #fff; }
+    #status { margin: 0; opacity: .85; min-height: 2.5em; }
+    #time { margin: 0; font-family: ui-monospace, monospace; font-size: 12px; color: #1db954; }
+    #time:empty { display: none; }
+    small { opacity: .6; }
+  </style>
+</head>
+<body>
+  <b>Listen Along</b>
+  <input id="room" placeholder="Kode room atau link room" />
+  <input id="name" maxlength="40" placeholder="Nama Anda (kosong = nama akun Spotify)" />
+  <div class="row">
+    <button id="join">Gabung di tab ini</button>
+    <button id="leave">Keluar</button>
+  </div>
+  <p id="status"></p>
+  <p id="time"></p>
+  <small>Buka YouTube, YouTube Music, atau open.spotify.com, lalu tekan Gabung di tab itu.</small>
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "Spotify Helper – Listen Along",
+  "version": "0.1.0",
+  "description": "Follow a Spotify Helper room on YouTube, YouTube Music or the Spotify web player.",
+  "permissions": ["storage"],
+  "host_permissions": [
+    "https://www.youtube.com/*",
+    "https://music.youtube.com/*",
+    "https://open.spotify.com/*",
+    "https://*.firebasedatabase.app/*",
+    "https://*.firebaseio.com/*"
+  ],
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    {
+      "matches": ["https://www.youtube.com/*", "https://music.youtube.com/*", "https://open.spotify.com/*"],
+      "js": ["config.js", "content.js"]
+    }
+  ],
+  "action": { "default_popup": "popup.html", "default_title": "Listen Along" }
+}
