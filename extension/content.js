@@ -48,7 +48,7 @@ function navigate(url, key = url) {
 }
 
 let busy = false;
-setInterval(async () => {
+async function run() {
   if (busy || !room || myTab === null || myTab !== followerTab) return;
   busy = true;
   try {
@@ -58,9 +58,15 @@ setInterval(async () => {
   } finally {
     busy = false;
   }
-}, 1500);
+}
+setInterval(run, 1500);
+let endTimer;
 
 let lastBeat = 0;
+// Room timestamps are Firebase server time. This machine's clock can be seconds off (1.6 s measured on a
+// dev laptop), so estimate the offset from each heartbeat: the PUT echoes the server-resolved timestamp.
+let serverOffset = 0;
+const serverNow = () => Date.now() + serverOffset;
 
 // The rules deny a kicked uid; the host also deletes its presence entry.
 function leaveKicked() {
@@ -71,26 +77,50 @@ function leaveKicked() {
 
 async function tick() {
   const auth = await chrome.runtime.sendMessage({ type: "auth" });
-  if (!auth) return report("Tidak bisa login ke Firebase");
+  // No reply at all usually means the extension was updated but not reloaded in chrome://extensions.
+  if (!auth) return report("Tidak bisa login ke Firebase (tidak ada jawaban). Reload extension di chrome://extensions.");
+  if (auth.error) return report(`Tidak bisa login ke Firebase: ${auth.error}`);
   if (Date.now() - lastBeat > 15_000) {
     lastBeat = Date.now();
+    chrome.storage.local.set({ displayName: displayName() }); // popup requests use the same name
+    const sent = Date.now();
     const beat = await fetch(`${DB_URL}/listeners/${room}/${auth.uid}.json?auth=${auth.idToken}`, {
       method: "PUT",
       body: JSON.stringify({ name: displayName(), via: SITE, at: { ".sv": "timestamp" } }),
     });
     if (beat.status === 401 || beat.status === 403) return leaveKicked();
+    const echoed = await beat.json().catch(() => null);
+    if (typeof echoed?.at === "number") serverOffset = echoed.at - (sent + Date.now()) / 2; // assume symmetric latency
   }
   const res = await fetch(`${DB_URL}/rooms/${room}/track.json?auth=${auth.idToken}`);
   if (res.status === 401 || res.status === 403) return leaveKicked();
-  const t = await res.json();
+  let t = await res.json();
   if (!t?.id) return report(`Room ${room}: host belum memutar lagu`);
-  // ponytail: assumes this computer's clock is close to Firebase server time (NTP keeps it within
-  // a few hundred ms). Read /.info/serverTimeOffset through the SDK if drift shows up.
-  const target = (t.progressMs + (t.isPlaying ? Date.now() - t.at : 0)) / 1000;
+  if (t.next && t.isPlaying) {
+    // Switch to the host's queued next song the moment this one should end; the host's own update
+    // a few seconds later corrects it if the host skipped elsewhere.
+    const endAt = t.at + t.durationSec * 1000 - t.progressMs;
+    if (serverNow() >= endAt) t = { ...t.next, progressMs: 0, isPlaying: true, at: endAt };
+    else {
+      if (SITE === "youtube") prefetchVideo(t.next);
+      // Ends before the next 1.5 s tick: wake up exactly at the end instead.
+      clearTimeout(endTimer);
+      if (endAt - serverNow() < 1500) endTimer = setTimeout(run, endAt - serverNow() + 50);
+    }
+  }
+  const target = (t.progressMs + (t.isPlaying ? serverNow() - t.at : 0)) / 1000;
   await (SITE === "spotify" ? syncSpotify(t, target) : syncYouTube(t, target));
 }
 
 // ---------- YouTube / YouTube Music: drive the page's <video> element ----------
+
+// Look the next song up ahead of time (background caches it), so switching needs no search.
+const prefetched = new Set();
+function prefetchVideo(next) {
+  if (prefetched.has(next.id)) return;
+  prefetched.add(next.id);
+  chrome.runtime.sendMessage({ type: "findVideo", track: next });
+}
 
 async function syncYouTube(t, target) {
   let l = loaded.get();
@@ -102,7 +132,13 @@ async function syncYouTube(t, target) {
     loaded.set(l);
   }
   if (new URLSearchParams(location.search).get("v") !== l.videoId) {
-    return navigate(`${location.origin}/watch?v=${l.videoId}&t=${Math.floor(target)}s`, l.videoId);
+    const url = `${location.origin}/watch?v=${l.videoId}&t=${Math.floor(target)}s`;
+    // Already on a watch page: swap the video in the existing player (page.js), no page reload.
+    if (document.querySelector("#movie_player")) {
+      window.postMessage({ type: "ls-load", videoId: l.videoId, start: target, url }, location.origin);
+      return report(`Memuat "${t.title}"…`);
+    }
+    return navigate(url, l.videoId);
   }
   if (document.querySelector("#movie_player.ad-showing")) return report("Iklan YouTube, menunggu…");
   const v = document.querySelector("#movie_player video") ?? document.querySelector("video");

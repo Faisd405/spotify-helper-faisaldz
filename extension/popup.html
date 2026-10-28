@@ -12,6 +12,16 @@
     #time { margin: 0; font-family: ui-monospace, monospace; font-size: 12px; color: #1db954; }
     #time:empty { display: none; }
     small { opacity: .6; }
+    #requests { display: grid; gap: 6px; border-top: 1px solid #333; padding-top: 8px; }
+    #requests[hidden] { display: none; }
+    #req-form { display: flex; gap: 6px; }
+    #req-form input { flex: 1; min-width: 0; }
+    #req-form button { flex: none; padding: 8px 12px; }
+    #req-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; max-height: 180px; overflow-y: auto; }
+    #req-list li { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+    #req-list li span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+    #req-list li small { opacity: .6; }
+    #req-list li button { flex: none; padding: 2px 8px; font-size: 11px; background: #333; color: #fff; }
   </style>
 </head>
 <body>
@@ -24,7 +34,16 @@
   </div>
   <p id="status"></p>
   <p id="time"></p>
+  <section id="requests" hidden>
+    <b>Request lagu</b>
+    <form id="req-form">
+      <input id="req-text" maxlength="200" required placeholder="Judul lagu atau link Spotify" />
+      <button>Request</button>
+    </form>
+    <ul id="req-list"></ul>
+  </section>
   <small>Buka YouTube, YouTube Music, atau open.spotify.com, lalu tekan Gabung di tab itu.</small>
+  <script src="config.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

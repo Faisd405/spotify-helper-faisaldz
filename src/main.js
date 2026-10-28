@@ -1,4 +1,4 @@
-import { login, logout, handleRedirect, isLoggedIn, getNowPlaying, isRateLimited, resolveTrack, addToQueue } from "./spotify.js";
+import { login, logout, handleRedirect, isLoggedIn, getNowPlaying, getNextTrack, isRateLimited, resolveTrack, addToQueue } from "./spotify.js";
 import { fetchLyrics } from "./lyrics.js";
 import { romanize, detectLang } from "./romanize.js";
 
@@ -36,6 +36,16 @@ function applyStyle() {
 settings.oninput = applyStyle;
 settings.onreset = () => setTimeout(applyStyle); // reset fires before the inputs revert
 applyStyle();
+
+$("#ext-btn").onclick = () => {
+  const code = new URLSearchParams(location.search).get("room")?.toUpperCase() ?? room?.code;
+  $("#ext-room").textContent = code ? ` (${code})` : "";
+  $("#ext-dialog").showModal();
+};
+$("#ext-copy").onclick = async () => {
+  await navigator.clipboard.writeText("chrome://extensions");
+  $("#ext-copy").textContent = "Tersalin";
+};
 
 const roomParam = new URLSearchParams(location.search).get("room")?.toUpperCase();
 if (roomParam) {
@@ -174,6 +184,7 @@ function hostRequests(code, reqs) {
           const queue = () =>
             addToQueue(r.track.id)
               .then(() => fb.updateRequest(code, id, { status: "queued" }))
+              .then(() => (nextAt = 0)) // re-read the queue on the next poll: this may now be next
               .catch((e) => status(e.message));
           const buttons = r.track && r.status !== "queued" ? [button("+ Queue", queue), button("Tolak", remove, true)] : [button("Hapus", remove, true)];
           return item(requestTitle(r), `${r.name} · ${requestState(r)}`, ...buttons);
@@ -197,11 +208,29 @@ function renderListenerRequests(code, reqs, myUid) {
   );
 }
 
+let next = null; // host: first upcoming track in the Spotify queue
+let nextFor = null; // track id `next` was fetched for
+let nextAt = 0;
+let endTimer;
+
 async function poll() {
   if (isRateLimited()) return; // backing off after a 429
   if (document.hidden && !(room && keepAlive)) return; // nobody is watching: save API calls
   try {
     const t = await getNowPlaying();
+    // Poll again right when this song should end, instead of up to 3 s later on the next tick.
+    clearTimeout(endTimer);
+    const left = t?.isPlaying ? t.durationSec * 1000 - t.progressMs : Infinity;
+    if (left < 3500) endTimer = setTimeout(poll, Math.max(left, 0) + 300);
+    if (room && t) {
+      // The queue changes rarely (song change, a request was added): refresh it on change or every 20 s.
+      if (t.id !== nextFor || Date.now() - nextAt > 20_000) {
+        nextFor = t.id;
+        nextAt = Date.now();
+        getNextTrack().then((n) => { next = n; prefetchLyrics(n); }, () => {});
+      }
+      t.next = next?.id === t.id ? null : next; // stale answer from the previous song
+    }
     if (room) {
       room.publish(t).catch(console.error);
       // A requested song that is now playing is done.
@@ -219,6 +248,12 @@ async function poll() {
 
 // ---------- Listener: follow a host's room through the Spotify Embed ----------
 
+function predict(t) {
+  if (!t?.next || !t.isPlaying) return t;
+  const endAt = t.fetchedAt + t.durationSec * 1000 - t.progressMs;
+  return Date.now() < endAt ? t : { ...t.next, progressMs: 0, isPlaying: true, fetchedAt: endAt, next: null };
+}
+
 async function listen(code) {
   status(`Room ${code}: menghubungkan…`);
   let player;
@@ -234,12 +269,22 @@ async function listen(code) {
 
   let kicked = false;
   let myUid;
+  // Follows the host, switching to the queued next song by itself the moment the current one should end
+  // (the host's own update arrives a few seconds later and corrects it if the host did something else).
+  let hostTrack = null;
+  const follow = () => {
+    const t = predict(hostTrack);
+    if (t?.id !== track?.id) showTrack(t);
+    else track = t;
+    player.sync(t);
+  };
   try {
     myUid = await fb.joinRoom(code, getName, {
       onTrack: (t) => {
         if (kicked) return;
-        showTrack(t);
-        player.sync(t);
+        hostTrack = t;
+        prefetchLyrics(t?.next);
+        follow();
         if (!t) status(`Room ${code}: host belum memutar lagu (atau room tidak ada).`);
       },
       onKicked: () => {
@@ -254,7 +299,7 @@ async function listen(code) {
   } catch (err) {
     return status(`Gagal masuk room: ${err.message}`);
   }
-  setInterval(() => !kicked && player.sync(track), 1000); // keeps correcting drift between host updates
+  setInterval(() => !kicked && follow(), 500);
 
   fb.watchRequests(code, (r) => renderListenerRequests(code, r, myUid));
   $("#request-form").onsubmit = async (e) => {
@@ -290,46 +335,63 @@ async function showTrack(t) {
   lyrics = [];
   render();
   try {
-    // 1) this device  2) shared Firebase cache  3) LRCLIB + romanize here
-    let found = JSON.parse(localStorage.getItem(`lyrics:${id}`));
-    let noRomaji = false;
-    if (!found && fb) {
-      status("Mengambil lirik…");
-      // Listeners wait a bit: the host is likely romanizing this song right now.
-      found = await fb.getSharedLyrics(id, room ? 0 : 8000);
-      if (id !== lastId) return; // song changed while loading
-      if (found) cacheLyrics(id, found);
-    }
-    if (!found) {
-      status("Mencari lirik…");
-      found = (await fetchLyrics(t)) ?? [];
-      if (id !== lastId) return;
-      if (!found.length) return status("Lirik tersinkron tidak ditemukan di LRCLIB.");
-
-      const lang = detectLang(found.map((l) => l.text).join("\n"));
-      if (lang === "ja") status("Memuat kamus Jepang (pertama kali agak lama)…");
-      try {
-        for (const line of found) line.roman = await romanize(line.text, lang);
-      } catch (err) {
-        // Show the original text now, but don't cache it: lyrics without romaji would stick
-        // (the shared cache is write-once), and a later play should retry.
-        console.error(err);
-        for (const line of found) line.roman = "";
-        noRomaji = true;
-      }
-      if (id !== lastId) return;
-      if (!noRomaji) cacheLyrics(id, found);
-    }
-    // Host shares every song it shows; write-once rules reject songs already cached.
-    if (room && !noRomaji) fb.saveSharedLyrics(id, found).catch(() => {});
-
-    lyrics = found;
+    const { lines, noRomaji } = await getLyrics(t, (msg) => id === lastId && status(msg));
+    if (id !== lastId) return; // song changed while loading
+    if (!lines.length) return status("Lirik tersinkron tidak ditemukan di LRCLIB.");
+    lyrics = lines;
     status(noRomaji ? "Romaji gagal dimuat, menampilkan lirik asli. Coba putar ulang lagunya nanti." : "");
     render();
   } catch (err) {
     console.error(err);
     status(err.message);
   }
+}
+
+// One load per song even if showTrack and a prefetch ask at the same time.
+const inflight = new Map();
+function getLyrics(t, say = () => {}) {
+  if (!inflight.has(t.id)) inflight.set(t.id, loadLyrics(t, say).finally(() => inflight.delete(t.id)));
+  return inflight.get(t.id);
+}
+
+// Prepare the next song's lyrics + romaji in the background so the switch is instant.
+const prefetched = new Set();
+function prefetchLyrics(t) {
+  if (!t || prefetched.has(t.id) || localStorage.getItem(`lyrics:${t.id}`)) return;
+  prefetched.add(t.id);
+  getLyrics(t).catch(() => {});
+}
+
+// 1) this device  2) shared Firebase cache  3) LRCLIB + romanize here. Returns { lines, noRomaji }.
+async function loadLyrics(t, say) {
+  let lines = JSON.parse(localStorage.getItem(`lyrics:${t.id}`));
+  if (!lines && fb) {
+    say("Mengambil lirik…");
+    // Listeners wait a bit: the host is likely romanizing this song right now.
+    lines = await fb.getSharedLyrics(t.id, room ? 0 : 8000);
+    if (lines) cacheLyrics(t.id, lines);
+  }
+  let noRomaji = false;
+  if (!lines) {
+    say("Mencari lirik…");
+    lines = (await fetchLyrics(t)) ?? [];
+    if (!lines.length) return { lines, noRomaji };
+    const lang = detectLang(lines.map((l) => l.text).join("\n"));
+    if (lang === "ja") say("Memuat kamus Jepang (pertama kali agak lama)…");
+    try {
+      for (const line of lines) line.roman = await romanize(line.text, lang);
+    } catch (err) {
+      // Show the original text now, but don't cache it: lyrics without romaji would stick
+      // (the shared cache is write-once), and a later play should retry.
+      console.error(err);
+      for (const line of lines) line.roman = "";
+      noRomaji = true;
+    }
+    if (!noRomaji) cacheLyrics(t.id, lines);
+  }
+  // Host shares every song it loads; write-once rules reject songs already cached.
+  if (room && !noRomaji) fb.saveSharedLyrics(t.id, lines).catch(() => {});
+  return { lines, noRomaji };
 }
 
 // ~5-10 KB per song, so localStorage (~5 MB) holds hundreds. When full, drop all cached lyrics and retry.

@@ -52,10 +52,13 @@ Usage: tap **Buat Room** → **Bagikan link**. Friends open the link and tap **G
 `extension/` lets a listener follow a room on **YouTube / YouTube Music** or the **Spotify web player**
 instead of the in-page embed. No API key: it reads YouTube's own search page to find the video.
 
-1. Copy `extension/config.example.js` to `extension/config.js` and fill in the values from `.env`.
-   Then open `chrome://extensions`, enable **Developer mode**, click **Load unpacked**, and pick the `extension` folder.
+1. On the site, click **🧩 Extension** → **Download extension (.zip)** and extract it. The build packs `extension/`
+   into `spotify-helper-extension.zip` with `config.js` filled in from the `VITE_FIREBASE_*` variables.
+   (Developing locally instead: copy `extension/config.example.js` to `extension/config.js` and load that folder.)
+   Then open `chrome://extensions`, enable **Developer mode**, click **Load unpacked**, and pick the extracted folder.
 2. Open youtube.com, music.youtube.com or open.spotify.com in a tab.
 3. Click the extension icon, paste the room code or link, and press **Gabung di tab ini**.
+   The popup also lets you request songs, the same as the web listener panel.
 
 The YouTube side drives the page's `<video>` element and waits out ads. The Spotify web player side clicks
 Spotify's own controls, so it is experimental and breaks if Spotify changes its markup.

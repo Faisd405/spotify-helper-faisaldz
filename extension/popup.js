@@ -38,6 +38,60 @@ $("#leave").onclick = async () => {
   render();
 };
 
+// ---------- Song requests (same data and rules as the web listener's request panel) ----------
+
+const auth = () => chrome.runtime.sendMessage({ type: "auth" });
+const STATE = (r) => (r.status === "queued" ? "di queue" : r.status === "notfound" ? "tidak ketemu" : r.track ? "menunggu host" : "mencari…");
+
+async function loadRequests() {
+  const { room } = await chrome.storage.local.get("room");
+  $("#requests").hidden = !room;
+  if (!room) return;
+  const a = await auth();
+  if (!a?.idToken) return;
+  const res = await fetch(`${DB_URL}/requests/${room}.json?auth=${a.idToken}`);
+  if (!res.ok) return; // e.g. kicked: the rules deny reads
+  const reqs = Object.entries((await res.json()) ?? {}).sort(([, x], [, y]) => x.at - y.at);
+  // Names and request text come from other people: textContent only.
+  $("#req-list").replaceChildren(
+    ...reqs.map(([id, r]) => {
+      const li = document.createElement("li");
+      const span = document.createElement("span");
+      span.textContent = r.track ? `${r.track.title} — ${r.track.artist}` : r.text;
+      span.append(Object.assign(document.createElement("small"), { textContent: ` · ${r.name} · ${STATE(r)}` }));
+      li.append(span);
+      if (r.by === a.uid && r.status !== "queued") {
+        const cancel = Object.assign(document.createElement("button"), { type: "button", textContent: "Batal" });
+        cancel.onclick = async () => {
+          await fetch(`${DB_URL}/requests/${room}/${id}.json?auth=${a.idToken}`, { method: "DELETE" });
+          loadRequests();
+        };
+        li.append(cancel);
+      }
+      return li;
+    }),
+  );
+}
+
+$("#req-form").onsubmit = async (e) => {
+  e.preventDefault();
+  const text = $("#req-text").value.trim();
+  const { room, name, displayName } = await chrome.storage.local.get(["room", "name", "displayName"]);
+  const a = await auth();
+  if (!text || !room) return;
+  if (!a?.idToken) return ($("#status").textContent = `Request gagal: ${a?.error ?? "tidak bisa login ke Firebase"}`);
+  const res = await fetch(`${DB_URL}/requests/${room}.json?auth=${a.idToken}`, {
+    method: "POST", // REST POST = push(): Firebase picks the id
+    body: JSON.stringify({ by: a.uid, name: (name || displayName || "Pendengar").slice(0, 40), text, at: { ".sv": "timestamp" } }),
+  });
+  if (!res.ok) return ($("#status").textContent = `Request gagal (HTTP ${res.status})`);
+  $("#req-text").value = "";
+  loadRequests();
+};
+
+loadRequests();
+setInterval(loadRequests, 3000);
+
 chrome.storage.local.get("name").then(({ name }) => ($("#name").value = name ?? ""));
 $("#name").oninput = () => chrome.storage.local.set({ name: $("#name").value.trim() });
 

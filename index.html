@@ -21,9 +21,22 @@
     #clock progress::-webkit-progress-value { background: var(--active); border-radius: 2px; }
     #clock progress::-moz-progress-bar { background: var(--active); border-radius: 2px; }
     button { background: #1db954; color: #000; border: 0; border-radius: 999px; padding: 10px 20px; font-weight: 700; font-size: 1rem; }
-    #logout, #room, #room-share { background: #333; color: #fff; padding: 6px 12px; font-size: .8rem; }
-    #room-info { padding: 0 16px; }
-    .panel { margin: 0 16px 8px; padding: 8px 12px; background: #ffffff10; border-radius: 10px; }
+    #logout, #room, #room-share, #ext-btn { background: #333; color: #fff; padding: 6px 12px; font-size: .8rem; }
+    /* Extensions only exist on desktop browsers. */
+    @media (pointer: coarse) { #ext-btn { display: none; } }
+    #ext-dialog { max-width: 440px; border: 0; border-radius: 14px; padding: 18px 20px; background: #282828; color: #fff; }
+    #ext-dialog::backdrop { background: #000a; }
+    #ext-dialog h3 { margin: 0 0 6px; }
+    #ext-dialog p { margin: 0 0 10px; opacity: .8; font-size: .9rem; }
+    #ext-dialog ol { margin: 0 0 14px; padding-left: 20px; display: grid; gap: 8px; font-size: .9rem; }
+    #ext-dialog code { background: #ffffff1a; padding: 1px 5px; border-radius: 4px; }
+    #ext-dialog a { color: var(--active); font-weight: 700; }
+    #ext-dialog .small { padding: 2px 8px; font-size: .75rem; background: #333; color: #fff; }
+    #ext-dialog form { display: flex; justify-content: flex-end; margin: 0; }
+    #dock { position: fixed; left: 0; right: 0; bottom: 0; z-index: 2; padding: 0 12px calc(12px + env(safe-area-inset-bottom)); pointer-events: none; }
+    #room-info { margin: 0 0 4px; }
+    .panel { pointer-events: auto; max-width: 560px; margin: 0 auto; padding: 10px 14px; background: #282828; color: #fff; border-radius: 12px; box-shadow: 0 -4px 24px #0009; }
+    .panel-body { max-height: 50vh; overflow-y: auto; overscroll-behavior: contain; }
     .panel[hidden] { display: none; }
     .panel summary { cursor: pointer; font-weight: 600; }
     .panel h4 { margin: 10px 0 4px; font-size: .85rem; opacity: .7; }
@@ -40,9 +53,9 @@
     #player { position: sticky; top: 56px; z-index: 1; padding: 0 16px 8px; background: var(--bg); display: grid; gap: 8px; }
     #player[hidden] { display: none; }
     #status { padding: 0 16px; opacity: .7; }
-    ol { list-style: none; margin: 0; padding: 40vh 16px; }
-    li { padding: 10px 0; opacity: .35; transition: opacity .2s, color .2s; }
-    li.active { opacity: 1; color: var(--active); }
+    #lyrics { list-style: none; margin: 0; padding: 40vh 16px calc(40vh + 64px); }
+    #lyrics li { padding: 10px 0; opacity: .35; transition: opacity .2s, color .2s; }
+    #lyrics li.active { opacity: 1; color: var(--active); }
     p { margin: 0; }
     .roman { font-size: var(--roman-size); font-weight: 700; }
     .orig { font-size: var(--orig-size); opacity: .75; margin-top: 4px; display: var(--show-orig); }
@@ -66,6 +79,7 @@
     <button id="login" hidden>Login Spotify</button>
     <button id="room" hidden>Buat Room</button>
     <button id="logout" hidden>Logout</button>
+    <button id="ext-btn" type="button" title="Ikut room lewat YouTube / Spotify Web">🧩 Extension</button>
     <details id="settings">
       <summary aria-label="Pengaturan tampilan">⚙</summary>
       <!-- Each input's name maps to a CSS variable --name; data-unit is appended to the value. -->
@@ -82,30 +96,51 @@
       </form>
     </details>
   </header>
-  <p id="room-info" hidden>Room <b id="room-code"></b> <button id="room-share" type="button">Bagikan link</button></p>
   <section id="player" hidden>
     <div id="embed"></div>
     <button id="join" hidden>▶ Gabung &amp; putar</button>
   </section>
-  <!-- Host: who's listening + song requests. Listener: name + request form. Filled by main.js. -->
-  <details id="host-panel" class="panel" hidden>
-    <summary id="host-summary">Room</summary>
-    <h4>Pendengar</h4>
-    <ul id="listener-list"></ul>
-    <h4>Request lagu</h4>
-    <ul id="host-requests"></ul>
-  </details>
-  <details id="listener-panel" class="panel" hidden>
-    <summary id="listener-summary">Request lagu</summary>
-    <label>Nama Anda <input id="listener-name" maxlength="40" placeholder="Pendengar" /></label>
-    <form id="request-form">
-      <input id="request-text" maxlength="200" required placeholder="Judul lagu atau link Spotify" />
-      <button>Request</button>
-    </form>
-    <ul id="listener-requests"></ul>
-  </details>
   <p id="status"></p>
   <ol id="lyrics"></ol>
+  <!-- Room management is docked to the bottom of the screen: the lyric list auto-scrolls to the active
+       line, so anything placed in the page flow above it would keep scrolling out of reach. -->
+  <div id="dock">
+    <details id="host-panel" class="panel" hidden>
+      <summary id="host-summary">Room</summary>
+      <div class="panel-body">
+        <p id="room-info" hidden>Room <b id="room-code"></b> <button id="room-share" type="button">Bagikan link</button></p>
+        <h4>Pendengar</h4>
+        <ul id="listener-list"></ul>
+        <h4>Request lagu</h4>
+        <ul id="host-requests"></ul>
+      </div>
+    </details>
+    <details id="listener-panel" class="panel" hidden>
+      <summary id="listener-summary">Request lagu</summary>
+      <div class="panel-body">
+        <label>Nama Anda <input id="listener-name" maxlength="40" placeholder="Pendengar" /></label>
+        <form id="request-form">
+          <input id="request-text" maxlength="200" required placeholder="Judul lagu atau link Spotify" />
+          <button>Request</button>
+        </form>
+        <ul id="listener-requests"></ul>
+      </div>
+    </details>
+  </div>
+  <dialog id="ext-dialog">
+    <h3>Install extension Listen Along</h3>
+    <p>Ikut room lewat YouTube, YouTube Music, atau Spotify Web Player di Chrome / Edge desktop, plus request lagu dari popup-nya.</p>
+    <ol>
+      <li><a href="spotify-helper-extension.zip" download>Download extension (.zip)</a>, lalu extract.</li>
+      <li>Buka <code>chrome://extensions</code> <button id="ext-copy" class="small" type="button">Salin</button>
+        <br /><small>Browser tidak mengizinkan link langsung ke halaman ini, jadi tempel di address bar.</small></li>
+      <li>Aktifkan <b>Developer mode</b> (pojok kanan atas).</li>
+      <li>Klik <b>Load unpacked</b>, lalu pilih folder <code>spotify-helper-extension</code> hasil extract.</li>
+      <li>Buka YouTube / Spotify Web, klik ikon 🧩 → <b>Listen Along</b>, masukkan kode room<span id="ext-room"></span>.</li>
+    </ol>
+    <p>Update: download lagi, timpa folder lama, lalu klik <b>Reload</b> di <code>chrome://extensions</code>.</p>
+    <form method="dialog"><button>Tutup</button></form>
+  </dialog>
   <script type="module" src="./src/main.js"></script>
 </body>
 </html>

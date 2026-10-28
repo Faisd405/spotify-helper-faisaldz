@@ -55,8 +55,8 @@ async function getAuth() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ returnSecureToken: true }),
     });
-    const j = await res.json();
-    if (!j.idToken) throw new Error(j.error?.message ?? "sign-in failed");
+    const j = await res.json().catch(() => ({}));
+    if (!j.idToken) throw new Error(j.error?.message ?? `sign-in HTTP ${res.status}`);
     next = { idToken: j.idToken, refreshToken: j.refreshToken, uid: j.localId, expiresAt: Date.now() + Number(j.expiresIn) * 1000 };
   }
   await chrome.storage.local.set({ auth: next });
@@ -66,7 +66,7 @@ async function getAuth() {
 chrome.runtime.onMessage.addListener((msg, sender, reply) => {
   if (msg.type === "whoami") reply(sender.tab?.id ?? null);
   if (msg.type === "auth") {
-    getAuth().then(reply, () => reply(null));
+    getAuth().then(reply, (err) => reply({ error: err.message || String(err) })); // shown in the popup
     return true;
   }
   if (msg.type === "findVideo") {

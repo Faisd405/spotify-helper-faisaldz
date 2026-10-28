@@ -43,6 +43,8 @@ export async function hostRoom(code) {
           progressMs: t.progressMs,
           isPlaying: t.isPlaying,
           at: t.fetchedAt + serverOffset,
+          // Next song in the host's queue: listeners pre-load it and switch at the expected end.
+          next: t.next ? { id: t.next.id, title: t.next.title, artist: t.next.artist, album: t.next.album, durationSec: t.next.durationSec } : null,
         },
       }),
     // Children first: the rules check hostUid on the room, which is gone once the room is removed.
