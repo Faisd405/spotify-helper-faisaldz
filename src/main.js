@@ -1,4 +1,4 @@
-import { login, logout, handleRedirect, isLoggedIn, getNowPlaying, getNextTrack, isRateLimited, resolveTrack, addToQueue } from "./spotify.js";
+import { login, logout, handleRedirect, isLoggedIn, getNowPlaying, getQueue, isRateLimited, resolveTrack, addToQueue } from "./spotify.js";
 import { fetchLyrics } from "./lyrics.js";
 import { romanize, detectLang } from "./romanize.js";
 
@@ -138,8 +138,30 @@ function item(main, sub, ...buttons) {
   li.append(span, ...buttons);
   return li;
 }
-function button(label, onclick, secondary = false) {
-  return Object.assign(document.createElement("button"), { type: "button", textContent: label, onclick, className: secondary ? "secondary" : "" });
+// action may be async: the button is disabled and relabelled until it finishes, so a click is visible.
+function button(label, action, secondary = false, busyLabel = "…") {
+  const b = Object.assign(document.createElement("button"), { type: "button", textContent: label, className: secondary ? "secondary" : "" });
+  b.onclick = async () => {
+    b.disabled = true;
+    b.textContent = busyLabel;
+    try {
+      await action();
+    } catch (e) {
+      status(e.message);
+    } finally {
+      b.disabled = false; // usually gone already: the list re-renders from Firebase
+      b.textContent = label;
+    }
+  };
+  return b;
+}
+
+// Upcoming songs in the host's Spotify queue (host: fetched; listener: from the room).
+function renderQueue(selector, queue) {
+  const len = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+  $(selector).replaceChildren(
+    ...(queue.length ? queue.map((q, i) => item(`${i + 1}. ${q.title} — ${q.artist}`, len(q.durationSec))) : [empty("Antrian kosong")]),
+  );
 }
 const empty = (text) => item(text);
 const VIA = { web: "Web", youtube: "YouTube", spotify: "Spotify Web" };
@@ -158,7 +180,7 @@ function renderListeners(code, data) {
   $("#listener-list").replaceChildren(
     ...(live.length
       ? live.map(([uid, l]) =>
-          item(l.name, VIA[l.via] ?? l.via, button("Kick", () => confirm(`Keluarkan ${l.name} dari room?`) && fb.kick(code, uid).catch((e) => status(e.message)), true)))
+          item(l.name, VIA[l.via] ?? l.via, button("Kick", () => confirm(`Keluarkan ${l.name} dari room?`) && fb.kick(code, uid), true, "Kick…")))
       : [empty("Belum ada pendengar")]),
   );
   updateHostSummary();
@@ -180,13 +202,15 @@ function hostRequests(code, reqs) {
   $("#host-requests").replaceChildren(
     ...(entries.length
       ? entries.map(([id, r]) => {
-          const remove = () => fb.removeRequest(code, id).catch((e) => status(e.message));
-          const queue = () =>
-            addToQueue(r.track.id)
-              .then(() => fb.updateRequest(code, id, { status: "queued" }))
-              .then(() => (nextAt = 0)) // re-read the queue on the next poll: this may now be next
-              .catch((e) => status(e.message));
-          const buttons = r.track && r.status !== "queued" ? [button("+ Queue", queue), button("Tolak", remove, true)] : [button("Hapus", remove, true)];
+          const remove = () => fb.removeRequest(code, id);
+          // Once it's in the Spotify queue the request is done: it moves to the "Antrian" list instead.
+          const queue = async () => {
+            await addToQueue(r.track.id);
+            await fb.removeRequest(code, id);
+            status(`✓ "${r.track.title}" masuk antrian`);
+            refreshQueue();
+          };
+          const buttons = r.track ? [button("+ Queue", queue, false, "Menambahkan…"), button("Tolak", remove, true, "…")] : [button("Hapus", remove, true, "…")];
           return item(requestTitle(r), `${r.name} · ${requestState(r)}`, ...buttons);
         })
       : [empty("Belum ada request")]),
@@ -202,16 +226,25 @@ function renderListenerRequests(code, reqs, myUid) {
       item(
         requestTitle(r),
         `${r.name} · ${requestState(r)}`,
-        ...(r.by === myUid && r.status !== "queued" ? [button("Batal", () => fb.removeRequest(code, id).catch((e) => status(e.message)), true)] : []),
+        ...(r.by === myUid && r.status !== "queued" ? [button("Batal", () => fb.removeRequest(code, id), true, "…")] : []),
       ),
     ),
   );
 }
 
-let next = null; // host: first upcoming track in the Spotify queue
-let nextFor = null; // track id `next` was fetched for
-let nextAt = 0;
+let upcoming = []; // host: next songs in the Spotify queue
+let queueFor = null; // track id `upcoming` was fetched for
+let queueAt = 0;
 let endTimer;
+
+function refreshQueue() {
+  queueAt = Date.now();
+  getQueue().then((q) => {
+    upcoming = q;
+    prefetchLyrics(q[0]);
+    renderQueue("#host-queue", q);
+  }, () => {});
+}
 
 async function poll() {
   if (isRateLimited()) return; // backing off after a 429
@@ -223,13 +256,14 @@ async function poll() {
     const left = t?.isPlaying ? t.durationSec * 1000 - t.progressMs : Infinity;
     if (left < 3500) endTimer = setTimeout(poll, Math.max(left, 0) + 300);
     if (room && t) {
-      // The queue changes rarely (song change, a request was added): refresh it on change or every 20 s.
-      if (t.id !== nextFor || Date.now() - nextAt > 20_000) {
-        nextFor = t.id;
-        nextAt = Date.now();
-        getNextTrack().then((n) => { next = n; prefetchLyrics(n); }, () => {});
+      // The queue changes rarely (song change, a request was queued): refresh on change or every 20 s.
+      if (t.id !== queueFor || Date.now() - queueAt > 20_000) {
+        queueFor = t.id;
+        refreshQueue();
       }
-      t.next = next?.id === t.id ? null : next; // stale answer from the previous song
+      // Right after a song change the old answer still lists the song now playing first: drop it.
+      t.queue = upcoming[0]?.id === t.id ? upcoming.slice(1) : upcoming;
+      t.next = t.queue[0] ?? null;
     }
     if (room) {
       room.publish(t).catch(console.error);
@@ -284,6 +318,7 @@ async function listen(code) {
         if (kicked) return;
         hostTrack = t;
         prefetchLyrics(t?.next);
+        renderQueue("#listener-queue", t?.queue ?? []);
         follow();
         if (!t) status(`Room ${code}: host belum memutar lagu (atau room tidak ada).`);
       },

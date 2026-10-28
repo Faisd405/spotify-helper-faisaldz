@@ -24,6 +24,8 @@ const signIn = () => (signedIn ??= signInAnonymously(getAuth(app)).then((c) => c
 
 // ---------- Host ----------
 
+const slim = ({ id, title, artist, album, durationSec }) => ({ id, title, artist, album, durationSec });
+
 // Claims rooms/{code} for this host. Rules reject it if another host owns the code.
 export async function hostRoom(code) {
   const user = await signIn();
@@ -44,7 +46,8 @@ export async function hostRoom(code) {
           isPlaying: t.isPlaying,
           at: t.fetchedAt + serverOffset,
           // Next song in the host's queue: listeners pre-load it and switch at the expected end.
-          next: t.next ? { id: t.next.id, title: t.next.title, artist: t.next.artist, album: t.next.album, durationSec: t.next.durationSec } : null,
+          next: t.next ? slim(t.next) : null,
+          queue: (t.queue ?? []).map(slim), // up to 10 upcoming songs, shown in every listener's room panel
         },
       }),
     // Children first: the rules check hostUid on the room, which is gone once the room is removed.

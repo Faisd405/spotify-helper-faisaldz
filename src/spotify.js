@@ -138,9 +138,12 @@ export async function resolveTrack(text) {
 
 export const addToQueue = (id) => api(`/me/player/queue?${new URLSearchParams({ uri: `spotify:track:${id}` })}`, { method: "POST" });
 
-// First upcoming track in the host's queue (respects shuffle/requests), so listeners can prepare it.
-export async function getNextTrack() {
+// Upcoming tracks in the host's queue, in play order (respects shuffle and added requests).
+// Shown to everyone in the room; the first one is pre-loaded by listeners.
+export async function getQueue(limit = 10) {
   const q = await api("/me/player/queue");
-  const n = q?.queue?.find((item) => item.type === "track");
-  return n ? { id: n.id, title: n.name, artist: n.artists[0].name, album: n.album.name, durationSec: Math.round(n.duration_ms / 1000) } : null;
+  return (q?.queue ?? [])
+    .filter((item) => item.type === "track")
+    .slice(0, limit)
+    .map((n) => ({ id: n.id, title: n.name, artist: n.artists[0].name, album: n.album.name, durationSec: Math.round(n.duration_ms / 1000) }));
 }

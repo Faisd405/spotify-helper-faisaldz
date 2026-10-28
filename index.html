@@ -21,6 +21,8 @@
     #clock progress::-webkit-progress-value { background: var(--active); border-radius: 2px; }
     #clock progress::-moz-progress-bar { background: var(--active); border-radius: 2px; }
     button { background: #1db954; color: #000; border: 0; border-radius: 999px; padding: 10px 20px; font-weight: 700; font-size: 1rem; }
+    button { cursor: pointer; }
+    button:disabled { cursor: progress; opacity: .6; }
     #logout, #room, #room-share, #ext-btn { background: #333; color: #fff; padding: 6px 12px; font-size: .8rem; }
     /* Extensions only exist on desktop browsers. */
     @media (pointer: coarse) { #ext-btn { display: none; } }
@@ -109,6 +111,8 @@
       <summary id="host-summary">Room</summary>
       <div class="panel-body">
         <p id="room-info" hidden>Room <b id="room-code"></b> <button id="room-share" type="button">Bagikan link</button></p>
+        <h4>Antrian berikutnya</h4>
+        <ul id="host-queue"></ul>
         <h4>Pendengar</h4>
         <ul id="listener-list"></ul>
         <h4>Request lagu</h4>
@@ -124,6 +128,8 @@
           <button>Request</button>
         </form>
         <ul id="listener-requests"></ul>
+        <h4>Antrian berikutnya</h4>
+        <ul id="listener-queue"></ul>
       </div>
     </details>
   </div>
