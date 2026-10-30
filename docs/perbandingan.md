@@ -21,6 +21,11 @@ dan pinyin-pro (Mandarin). Jadi hasil romaji Jepangnya seharusnya sama.
 | Tampilan | Warna, ukuran font, perataan, jumlah baris sebelum/sesudah, blur | Ukuran romaji dan teks asli, 3 warna, teks asli bisa disembunyikan |
 | Cache | Hanya di device itu | Di device, plus dibagikan ke pendengar lewat Firebase (HP tidak perlu mengunduh kamus Jepang 12 MB) |
 
+**Lirik Romaji di Spicetify** (30 Oktober 2026): Listen Along sekarang juga punya halaman lirik di Spotify desktop
+(tombol di playbar). Bedanya dengan lyrics-plus: romaji dan teks asli tampil bersamaan, pengaturan tampilannya sama dengan
+web, dan liriknya dibagikan ke pendengar room. Sumbernya mengikuti lyrics-plus: lirik Spotify sendiri (data Musixmatch),
+LRCLIB, lalu Genius (tidak tersinkron). API Musixmatch langsung tidak dipakai karena butuh token pengguna.
+
 **Belum dipastikan:** apakah lyrics-plus punya terjemahan lewat Musixmatch. `Translator.js` di dalamnya hanya
 menangani konversi (romaji, furigana, pinyin, dan sejenisnya), bukan terjemahan.
 

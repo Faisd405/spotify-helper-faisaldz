@@ -78,3 +78,8 @@ Development Mode limits); as listener it plays the exact same track and keeps wi
 `spicetify-listen-along.js` with the Firebase config prepended; the 🧩 Extension dialog shows the PowerShell
 command that downloads it into `%APPDATA%\spicetify\Extensions` and runs `spicetify apply`.
 Needs Spotify from spotify.com: Spicetify can't patch the Microsoft Store version.
+
+The same file adds **Lirik Romaji** (`spicetify/romaji-lyrics.js`, button in the playbar): a full-page lyrics view
+with romaji / romaja / pinyin above the original line, the web app's display settings (sizes, colours, offset,
+show original, alignment), click a line to seek. Sources: this device, the shared Firebase cache, Spotify's own
+lyrics, LRCLIB, Genius (not synced); "Sumber lain" tries the next one. Synced lyrics go back to the shared cache.

@@ -5,26 +5,27 @@ import { zipSync, strToU8 } from "fflate";
 const ZIP = "spotify-helper-extension.zip";
 const SPICETIFY = "spicetify-listen-along.js";
 
-// The QR generator for the Spicetify panel, bundled once into a self-contained IIFE (qrcode has no
-// browser build of its own, and Spicetify extensions are a single plain file).
-let qrBundle;
-function qrIife() {
-  qrBundle ??= build({
+// npm libraries for the Spicetify extension (QR, lyrics lookup, romanisation), bundled once into a
+// self-contained IIFE: Spicetify extensions are a single plain file.
+let libsBundle;
+function libsIife() {
+  libsBundle ??= build({
     configFile: false,
     logLevel: "silent",
-    build: { write: false, minify: true, lib: { entry: "spicetify/qr-entry.js", formats: ["iife"], name: "LAQR", fileName: "qr" } },
+    build: { write: false, minify: true, lib: { entry: "spicetify/libs-entry.js", formats: ["iife"], name: "LALIBS", fileName: "libs" } },
   }).then((out) => [out].flat()[0].output[0].code);
-  return qrBundle;
+  return libsBundle;
 }
 
-// The Spicetify extension is one file: QR helper + the same public config the web app ships + the code.
+// The Spicetify extension is one file: libraries + the same public config the web app ships + the code.
 async function spicetifyFile(env) {
   const config = {
     dbUrl: (env.VITE_FIREBASE_DATABASE_URL ?? "").replace(/\/$/, ""),
     apiKey: env.VITE_FIREBASE_API_KEY ?? "",
     siteUrl: env.VITE_SITE_URL ?? "https://spotify-helper-faisaldz.vercel.app/",
   };
-  return `${await qrIife()}\nglobalThis.LISTEN_ALONG_CONFIG = ${JSON.stringify(config)};\n` + fs.readFileSync("spicetify/listen-along.js", "utf8");
+  const code = ["listen-along.js", "romaji-lyrics.js"].map((f) => fs.readFileSync(`spicetify/${f}`, "utf8")).join("\n");
+  return `${await libsIife()}\nglobalThis.LISTEN_ALONG_CONFIG = ${JSON.stringify(config)};\n${code}`;
 }
 const SKIP = new Set(["config.js", "config.example.js", "check-search.mjs"]);
 

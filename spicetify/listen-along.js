@@ -1034,7 +1034,8 @@
     guard(() => onRoute(router.location))(); // Spotify may have been launched by the link itself
   }
 
-  globalThis.ListenAlong = { // devtools / tests
+  globalThis.ListenAlong = { // devtools / tests, and romaji-lyrics.js (shared lyrics cache, write-once)
+    saveLyrics: (id, lines) => db(`lyrics/${id}`, "PUT", { lines: lines.map(({ timeMs, text, roman }) => ({ timeMs, text, roman: roman ?? "" })) }),
     startHost, startListen, endHost, stop, follow, publish, control, openPanel, pullRoomData, advanceCheck, contextAdd, onRoute,
     get state() { return { mode, code, uid, status, serverOffset, room, members, queue, requests, settings }; },
   };
