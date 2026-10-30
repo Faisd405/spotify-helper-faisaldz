@@ -29,29 +29,55 @@ untuk membagikan lirik romaji ke semua orang di room.
 
 ## 2. Dengar bersama: Listen Along vs spicetify-jam
 
-[spicetify-jam](https://github.com/Kyzenkms/spicetify-jam) dicek pada commit `356e679` (1 Oktober 2026).
+Diperbarui 30 Oktober 2026. [spicetify-jam](https://github.com/Kyzenkms/spicetify-jam) dicek pada commit
+`356e679` (1 Oktober 2026, belum ada perubahan sejak itu).
 
-| | **Listen Along (Spotify Helper)** | **spicetify-jam** |
+### Yang sekarang setara
+
+| Fitur | Listen Along | spicetify-jam |
 |---|---|---|
-| Siapa yang bisa ikut | Host: web atau Spicetify. Pendengar: HP (web, Spotify Embed), extension browser (YouTube, YouTube Music, Spotify Web), atau Spicetify | Hanya sesama pengguna Spicetify di desktop |
-| Koneksi | Firebase Realtime Database (server pusat), jalan di jaringan mana pun | P2P (WebRTC via PeerJS + relay TURN). README mereka sendiri menyebut bisa gagal di jaringan kampus, kantor, atau seluler |
-| Queue | Pendengar request, host menyetujui dengan **+ Queue**. Ada daftar "Antrian berikutnya" | Queue bersama: semua orang bisa menambah, menghapus, dan mengurutkan |
-| Kontrol untuk tamu | ❌ Hanya host | ✅ "Pass the aux": host bisa memberi kontrol ke tamu |
-| Kehadiran | Nama dan platform. Kick ditegakkan oleh rules database | Avatar dengan foto profil Spotify |
-| Undangan | Kode 6 karakter dan link | Kode 6 karakter, link, dan QR |
-| Lirik romaji untuk semua | ✅ | ❌ |
-| Persiapan lagu berikutnya | ✅ Lirik dan video disiapkan, lalu pindah tepat saat lagu habis | Belum dicek |
-| Tampilan | Jendela dari tombol di bar atas | Sidebar dan mini player |
-| Privasi | Database sendiri | Versi asli mengirim telemetri tersembunyi (ID device permanen, heartbeat 30 menit, event sesi) ke server pribadi pembuatnya |
-| Lisensi | Milik sendiri | Tidak ada file LICENSE (README menyebut MIT), jadi kodenya tidak boleh disalin |
+| Panel samping di Spotify desktop | ✅ Ikut tema Spicetify | ✅ |
+| Mini player saat panel dikecilkan | ✅ | ✅ |
+| Undangan: kode 6 karakter, link, QR | ✅ | ✅ |
+| Now playing dengan cover dan progress | ✅ | ✅ |
+| Anggota dengan avatar dan badge host | ✅ | ✅ |
+| Queue bersama: tambah, hapus, urutkan (drag), putar sekarang | ✅ | ✅ |
+| "Added by" di tiap lagu | ✅ | ✅ |
+| Klik kanan lagu → tambah ke queue | ✅ | ✅ |
+| Kontrol untuk tamu (play/pause/next/prev) | ✅ Toggle host | ✅ Toggle host |
+| Kick | ✅ | ✅ |
 
-Batasan yang sama untuk kedua extension Spicetify: hanya desktop, termasuk area abu-abu aturan Spotify, bisa
-rusak setiap kali Spotify update (perbaiki dengan `spicetify backup apply`), dan iklan di akun Free membuat
-sinkron lepas sebentar.
+### Yang hanya ada di Listen Along
 
-**Ringkasnya:** spicetify-jam lebih lengkap untuk pesta mendengar di laptop (queue bersama, kontrol tamu,
-avatar). Listen Along unggul kalau pendengarnya campuran HP dan laptop, kalau butuh lirik romaji, atau kalau
-jaringannya membuat P2P gagal.
+| Fitur | Keterangan |
+|---|---|
+| Pendengar dari **HP, web, YouTube, YouTube Music** | spicetify-jam hanya untuk sesama pengguna Spicetify di desktop |
+| **Lirik romaji** untuk semua orang | Dengan cache bersama, jadi HP tidak perlu mengunduh kamus Jepang |
+| **Up next** dari Spotify | Ditampilkan setelah queue room, plus baris "Berikutnya" |
+| **Persetujuan lagu** | Opsi "Lagu dari tamu perlu disetujui" |
+| **Persiapan lagu berikutnya** | Lirik dan video disiapkan lebih dulu, lalu pindah tepat saat lagu habis |
+| **Gabung dari web ke Spotify desktop** | Link `spotify:search:listenalong-<kode>` |
+| Host bisa dari **web** | Dengan Spotify Premium dan login Web API; atau dari Spicetify |
+| **Kick dan izin ditegakkan server** | Rules Firebase: yang di-kick tidak bisa membaca room atau mengirim apa pun |
+| **Jalan di jaringan ketat** | Firebase (server pusat), bukan P2P yang bisa gagal di NAT kampus, kantor, atau seluler |
+| **Tanpa telemetri** | spicetify-jam asli mengirim telemetri tersembunyi ke server pribadi pembuatnya |
+
+### Yang masih lebih baik di spicetify-jam
+
+| Fitur | spicetify-jam | Listen Along sekarang |
+|---|---|---|
+| **Ketepatan sinkron** | Host mengecek setiap 400 ms, seek terkirim seketika, tamu dikoreksi kalau selisih lebih dari 160 ms (dengan filter) | Host Spicetify mengirim saat ganti lagu/play/pause **dan setiap 3 detik**; seek baru terkirim hingga 3 detik kemudian; toleransi selisih **2 detik** |
+| **Kecepatan sampai ke tamu** | P2P langsung (puluhan ms) | Web: push Firebase (sekitar 100–300 ms). Spicetify dan extension: polling setiap 1–1,5 detik |
+| **Seek dengan klik progress bar** | ✅ Host, atau tamu kalau diizinkan | ❌ Belum ada (perintah `seek` sudah didukung, tapi belum ada tombol/bar untuk memakainya) |
+| **Tanpa server** | Tidak butuh database | Butuh Firebase (paket gratis cukup) |
+| Durasi di queue dari pencarian | Ada | Lagu yang ditambah lewat pencarian di Spicetify belum punya durasi |
+
+### Kesimpulan
+
+Untuk **fitur dan tampilan**, Listen Along sekarang setara dan lebih luas (HP, web, YouTube, lirik romaji). Yang masih
+tertinggal adalah **ketepatan sinkron**. Perbaikannya sudah direncanakan sebagai Phase 5: cek posisi host setiap
+400 ms dan kirim seek seketika, streaming Firebase untuk pendengar, toleransi sekitar 300 ms dengan filter, dan
+progress bar yang bisa diklik.
 
 ## Instalasi di laptop ini
 
