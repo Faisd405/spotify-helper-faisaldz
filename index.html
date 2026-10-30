@@ -127,6 +127,10 @@
     .next-art { width: 24px; height: 24px; }
     #host-settings { display: grid; gap: 8px; }
     #host-settings[hidden], #me-name[hidden] { display: none; }
+    .open-spotify { color: var(--active); font-size: .75rem; font-weight: 700; text-decoration: none; justify-self: start; }
+    .open-spotify:hover, .desktop-join:hover { text-decoration: underline; }
+    .desktop-join { display: block; text-align: center; padding: 8px; border-radius: 999px; border: 1px solid #ffffff2a; color: #fff; text-decoration: none; font-size: .8rem; font-weight: 700; }
+    @media (pointer: coarse) { .desktop-join { display: none; } }
     .toggle { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: .85rem; }
     .toggle input { width: 20px; height: 20px; accent-color: var(--active); }
     #me-name { display: grid; gap: 4px; font-size: .8rem; }
@@ -206,6 +210,8 @@
           <button id="invite-btn" class="small secondary" type="button">Undang</button>
           <button id="end-room" class="small secondary" type="button" hidden>Akhiri</button>
         </div>
+        <!-- Opens Spotify desktop; the Listen Along Spicetify extension sees the search route and joins. -->
+        <a id="join-desktop" class="desktop-join" href="#" title="Butuh Spicetify + extension Listen Along di Spotify desktop">Gabung lewat Spotify desktop ↗</a>
         <div id="invite" hidden>
           <img id="qr" alt="QR untuk gabung room" />
           <span class="link" id="invite-link"></span>

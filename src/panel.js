@@ -58,6 +58,8 @@ export function renderNowPlaying(el, track, { controls, onControl, onError, next
       h("div", { className: "np-text" },
         h("b", { textContent: track.title }),
         h("span", { className: "muted", textContent: track.artist }),
+        // spotify: links open the desktop app (or the phone app) on this exact track.
+        h("a", { className: "open-spotify", href: `spotify:track:${track.id}`, textContent: "Buka di Spotify ↗", title: "Buka lagu ini di app Spotify" }),
         h("div", { className: "np-progress" }, h("span", { id: "np-elapsed", textContent: "0:00" }), h("progress", { id: "np-bar", max: 1, value: 0 }), h("span", { textContent: mmss(track.durationSec) })),
       ),
     ),

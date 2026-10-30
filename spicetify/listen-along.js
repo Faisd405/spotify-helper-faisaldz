@@ -896,8 +896,29 @@
   if (savedMode === "host" && savedRoom) guard(() => startHost(savedRoom))();
   if (savedMode === "listen" && savedRoom) startListen(savedRoom);
 
+  // "Gabung lewat Spotify desktop" on the website opens spotify:search:listenalong-<CODE>. Extensions can't
+  // register links of their own, but Spotify routes that to its search page, which we watch.
+  // ponytail: Platform.History is Spotify's internal router, not a Spicetify API; may change in updates.
+  const JOIN_ROUTE = /^\/search\/listenalong-([A-Za-z0-9]{6})(\/|$)/;
+  async function onRoute(location) {
+    const m = decodeURIComponent(location?.pathname ?? "").match(JOIN_ROUTE);
+    if (!m) return;
+    const c = m[1].toUpperCase();
+    Spicetify.Platform.History.replace("/"); // leave the search page for that "query"
+    if (isHost()) return notify(`Anda sedang host room ${code}. Akhiri dulu untuk gabung ke ${c}.`, true);
+    if (code === c) return openPanel(true);
+    if (code) stop();
+    await startListen(c);
+    notify(`Bergabung ke room ${c}`);
+  }
+  const router = Spicetify.Platform?.History;
+  if (router?.listen) {
+    router.listen((loc) => guard(() => onRoute(loc))());
+    guard(() => onRoute(router.location))(); // Spotify may have been launched by the link itself
+  }
+
   globalThis.ListenAlong = { // devtools / tests
-    startHost, startListen, endHost, stop, follow, publish, control, openPanel, pullRoomData, advanceCheck, contextAdd,
+    startHost, startListen, endHost, stop, follow, publish, control, openPanel, pullRoomData, advanceCheck, contextAdd, onRoute,
     get state() { return { mode, code, uid, status, serverOffset, room, members, queue, requests, settings }; },
   };
 })();

@@ -102,6 +102,7 @@ function showSession(isHost) {
   $("#hero").hidden = true;
   $("#session").hidden = false;
   $("#room-code").textContent = code;
+  $("#join-desktop").href = `spotify:search:listenalong-${code}`;
   $("#end-room").hidden = false;
   $("#end-room").textContent = isHost ? "Akhiri" : "Keluar";
   $("#host-settings").hidden = !isHost;
