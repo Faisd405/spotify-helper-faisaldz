@@ -76,6 +76,11 @@ selisih stabil rata-rata **29–44 ms**; host seek diikuti dalam **316–374 ms*
 **62 ms**. Extension YouTube (Chrome, lewat streaming): seek diikuti dalam **373 ms**, pause dalam **4 ms**. Selisih stabil
 di YouTube belum bisa diukur: Chrome headless dengan extension aktif tidak memutar video YouTube sama sekali.
 
+**Hemat kuota Firebase** (30 Oktober 2026): host hanya mengirim bagian yang berubah. Posisi dikirim ulang saat
+meleset > 300 ms dari perkiraan pendengar (seek), saat play/pause, atau sebagai heartbeat tiap 5 detik. Daftar up next,
+profil host, dan pengaturan hanya dikirim saat berubah. Hasil ukur: **0,10 MB per pendengar per jam** (sebelumnya
+3,16 MB dari Spicetify dan 9,49 MB dari web host). Seek tetap diikuti dalam 375 ms, pause 362 ms, play 128 ms.
+
 ### Yang masih lebih baik di spicetify-jam
 
 | | spicetify-jam | Listen Along |

@@ -64,10 +64,10 @@
   let offsetKnown = false;
   let publishes = 0;
   const serverNow = () => Date.now() + serverOffset;
-  async function writeTimed(path, value) {
+  async function writeTimed(path, value, method = "PUT") {
     const sent = Date.now();
-    const r = await db(path, "PUT", value);
-    const at = typeof value?.at === "object" || typeof value?.track?.at === "object" ? (r.data?.at ?? r.data?.track?.at) : undefined; // only server-resolved stamps
+    const r = await db(path, method, value);
+    const at = typeof value?.at === "object" ? r.data?.at : undefined; // only server-resolved stamps
     if (typeof at === "number") { serverOffset = at - (sent + Date.now()) / 2; offsetKnown = true; }
     return r;
   }
@@ -161,23 +161,62 @@
 
   // ---------- Host ----------
 
+  // Runs every 400 ms but only writes what changed, since every write is downloaded by every listener.
+  // Listeners extrapolate progressMs + (now - at), so the position is only re-sent when the real one strays
+  // more than 300 ms from that (seek, stall), on play/pause, or as a 5 s heartbeat.
+  let sent = { track: null, meta: "" }; // what listeners currently have
+  let publishing = false;
   async function publish() {
-    if (!isHost()) return;
-    const t = nowPlaying();
-    const q = sortedQueue().filter((it) => it.id !== t?.id);
-    const upcoming = spotifyUpcoming();
-    const host = await myProfile();
-    room = { hostUid: uid, host, settings, track: t && { ...t, at: serverNow(), next: q[0] ?? upcoming[0] ?? null, upcoming } };
-    const r = await writeTimed(`rooms/${code}`, {
-      hostUid: uid,
-      host,
-      settings,
-      // The server timestamp is when the write lands (~RTT/2 after the position was read); once the clock
-      // offset is known, stamp the read moment itself.
-      // Every 20th write still uses the server stamp, so the offset keeps being re-measured (~once a minute).
-      track: t && { ...t, at: offsetKnown && ++publishes % 20 ? serverNow() : TS, next: (q[0] && slimItem(q[0])) ?? upcoming[0] ?? null, upcoming },
-    });
-    if (r.status !== 200) say(`Gagal mengirim ke room (HTTP ${r.status}).`);
+    if (!isHost() || publishing) return;
+    publishing = true;
+    try {
+      const t = nowPlaying();
+      const q = sortedQueue().filter((it) => it.id !== t?.id);
+      const upcoming = spotifyUpcoming();
+      const host = await myProfile();
+      const now = serverNow();
+      const track = t && { ...t, next: (q[0] && slimItem(q[0])) ?? upcoming[0] ?? null, upcoming };
+      room = { hostUid: uid, host, settings, track: track && { ...track, at: now } };
+
+      const meta = JSON.stringify({ host, settings });
+      if (meta !== sent.meta) {
+        const r = await db(`rooms/${code}`, "PATCH", { hostUid: uid, host, settings });
+        if (r.status !== 200) return say(`Gagal mengirim ke room (HTTP ${r.status}).`);
+        sent.meta = meta;
+      }
+
+      const prev = sent.track;
+      let method = "PATCH";
+      let body;
+      if (!track) {
+        if (prev === null) return;
+        method = "PUT";
+        body = null;
+      } else if (prev?.id !== track.id) {
+        method = "PUT";
+        body = track;
+      } else {
+        body = {};
+        for (const [k, v] of Object.entries(track)) if (k !== "progressMs" && JSON.stringify(v) !== JSON.stringify(prev[k])) body[k] = v;
+        const predicted = prev.progressMs + (prev.isPlaying ? now - prev.at : 0);
+        if ("isPlaying" in body || Math.abs(predicted - track.progressMs) > 300 || now - prev.at > 5000) body.progressMs = track.progressMs;
+        if (!Object.keys(body).length) return;
+      }
+      if (body && "progressMs" in body) {
+        // The server timestamp is when the write lands (~RTT/2 after the position was read); once the clock
+        // offset is known, stamp the read moment itself. Every 20th still uses the server stamp, so the
+        // offset keeps being re-measured.
+        body.at = offsetKnown && ++publishes % 20 ? now : TS;
+      }
+      const r = await writeTimed(`rooms/${code}/track`, body, method);
+      if (r.status !== 200) {
+        sent.track = undefined; // unknown: send the whole track next time
+        return say(`Gagal mengirim ke room (HTTP ${r.status}).`);
+      }
+      sent.track = body === null ? null : { ...(method === "PUT" ? {} : prev), ...body, at: now };
+    } finally {
+      publishing = false;
+    }
   }
   const slimItem = ({ id, title, artist, album, art, durationSec }) => ({ id, title, artist, album: album ?? "", art: art ?? null, durationSec });
 
@@ -191,6 +230,7 @@
         mode = "host";
         code = c;
         uid = auth.uid;
+        sent = { track: null, meta: "" };
         store.set("la:mode", "host");
         store.set("la:room", c);
         await publish();
@@ -287,9 +327,9 @@
   // The room queue plays before Spotify's own "up next": start it right as the current song ends.
   let advancedFrom = null;
   let polledId = null;
-  let lastSeen = null; // host: last position sample, for seek detection
   function advanceCheck() {
     if (!isHost()) return;
+    publishNow(); // writes only what changed: seeks, play/pause and song changes reach listeners within ~400 ms
     const t = nowPlaying();
     if (!t) return;
     if (t.id !== polledId) {
@@ -300,17 +340,8 @@
       }
       justPlayed = null;
       polledId = t.id;
-      publish(); // instant song changes
       render(); // now playing card / mini player
     }
-    // A jump the clock can't explain = the host seeked: tell listeners now instead of on the 3 s heartbeat.
-    const now = Date.now();
-    if (lastSeen && lastSeen.id === t.id) {
-      // Play/pause flipped (the onplaypause event usually covers this; this is the backstop).
-      if (t.isPlaying !== lastSeen.playing) publishNow();
-      else if (t.isPlaying && Math.abs(t.progressMs - (lastSeen.pos + (now - lastSeen.at))) > 1200) publishNow();
-    }
-    lastSeen = { id: t.id, pos: t.progressMs, at: now, playing: t.isPlaying };
     const next = sortedQueue().find((it) => it.id !== t.id);
     const left = t.durationSec * 1000 - t.progressMs;
     if (next && t.isPlaying && left < 700 && advancedFrom !== t.id) {
@@ -492,7 +523,6 @@
   };
   const followLoop = guard(follow); // each is a no-op unless in that mode
   setInterval(followLoop, 1000);
-  setInterval(guard(publish), 3000);
   setInterval(guard(handleCommands), 1000);
   setInterval(guard(pullRoomData), 2000);
   setInterval(guard(async () => advanceCheck()), 400);

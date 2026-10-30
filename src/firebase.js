@@ -34,29 +34,57 @@ export async function hostRoom(code) {
   const room = ref(db, `rooms/${code}`);
   await set(room, { hostUid: user.uid, track: null });
   onDisconnect(ref(db, `rooms/${code}/track/isPlaying`)).set(false); // listeners pause if host drops
+  const sent = { track: null, meta: "" }; // what listeners currently have
   return {
     uid: user.uid,
-    publish: (t, { host, settings }) =>
-      set(room, {
-        hostUid: user.uid,
-        host,
-        settings,
-        track: t && {
-          ...slim(t),
-          progressMs: t.progressMs,
-          isPlaying: t.isPlaying,
-          at: t.fetchedAt + serverOffset,
-          // What plays next (room queue first, then Spotify): listeners pre-load it and switch at the end.
-          next: t.next ? slim(t.next) : null,
-          upcoming: (t.upcoming ?? []).map(slim), // Spotify's own "up next" after the room queue
-        },
-      }),
+    // Called every poll, but only writes what changed: every write is downloaded by every listener, so a
+    // full 2.6 KB room each second added up to ~9.5 MB per listener per hour.
+    publish: (t, { host, settings }) => publishDiff(code, user.uid, sent, t, host, settings),
     // Children first: the rules check hostUid on the room, which is gone once the room is removed.
     end: async () => {
       await update(ref(db), Object.fromEntries(["requests", "listeners", "kicked", "queues", "commands"].map((p) => [`${p}/${code}`, null])));
       await remove(room);
     },
   };
+}
+
+// Listeners extrapolate the position from progressMs + (now - at), so it is only re-sent when the real
+// position strays more than 300 ms from that, or as a 5 s heartbeat. Everything else is sent when it changes.
+const RESYNC_MS = 300;
+const HEARTBEAT_MS = 5000;
+async function publishDiff(code, hostUid, sent, t, host, settings) {
+  const writes = [];
+  const meta = JSON.stringify({ host, settings });
+  if (meta !== sent.meta) writes.push(update(ref(db, `rooms/${code}`), { hostUid, host, settings }).then(() => (sent.meta = meta)));
+
+  const trackRef = ref(db, `rooms/${code}/track`);
+  if (!t) {
+    if (sent.track !== null) writes.push(set(trackRef, null).then(() => (sent.track = null)));
+    return Promise.all(writes);
+  }
+  const now = t.fetchedAt + serverOffset; // server time of this position sample
+  const next = {
+    ...slim(t),
+    isPlaying: t.isPlaying,
+    // What plays next (room queue first, then Spotify): listeners pre-load it and switch at the end.
+    next: t.next ? slim(t.next) : null,
+    upcoming: (t.upcoming ?? []).map(slim), // Spotify's own "up next" after the room queue
+  };
+  const prev = sent.track;
+  if (!prev || prev.id !== t.id) {
+    const full = { ...next, progressMs: t.progressMs, at: now };
+    writes.push(set(trackRef, full).then(() => (sent.track = full)));
+    return Promise.all(writes);
+  }
+  const changes = {};
+  for (const [k, v] of Object.entries(next)) if (JSON.stringify(v) !== JSON.stringify(prev[k])) changes[k] = v;
+  const predicted = prev.progressMs + (prev.isPlaying ? now - prev.at : 0);
+  if ("isPlaying" in changes || Math.abs(predicted - t.progressMs) > RESYNC_MS || now - prev.at > HEARTBEAT_MS) {
+    changes.progressMs = t.progressMs;
+    changes.at = now;
+  }
+  if (Object.keys(changes).length) writes.push(update(trackRef, changes).then(() => (sent.track = { ...prev, ...changes })));
+  return Promise.all(writes);
 }
 
 // Kicked uids can no longer read the room, send heartbeats, edit the queue or send commands (rules).
