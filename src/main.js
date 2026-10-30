@@ -140,10 +140,12 @@ function renderRoom() {
   if (!code) return renderMini();
   const controls = isHost() || guestControl();
   // The card holds its own progress bar (updated by the clock tick); rebuild it only when it changes.
-  const key = `${track?.id}|${track?.isPlaying}|${controls}`;
+  // Up next: the room queue plays first, then Spotify's own list.
+  const next = sortedQueue().find((it) => it.id !== track?.id) ?? upcoming.find((it) => it.id !== track?.id) ?? null;
+  const key = `${track?.id}|${track?.isPlaying}|${controls}|${next?.id}`;
   if (key !== npKey) {
     npKey = key;
-    renderNowPlaying($("#np"), track, { controls, onControl: control, onError });
+    renderNowPlaying($("#np"), track, { controls, onControl: control, onError, next });
   }
   const list = liveMembers();
   $("#member-count").textContent = `(${list.length})`;

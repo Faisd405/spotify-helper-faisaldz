@@ -49,7 +49,7 @@ function art(url, cls = "art") {
 }
 
 // Now playing: art, title/artist, progress (filled in by the clock tick), optional playback controls.
-export function renderNowPlaying(el, track, { controls, onControl, onError }) {
+export function renderNowPlaying(el, track, { controls, onControl, onError, next }) {
   if (!track) return el.replaceChildren(h("p", { className: "muted", textContent: "Belum ada lagu yang diputar." }));
   const ctrl = (label, a, title) => button(label, () => onControl(a), { cls: "ctrl", title, onError });
   el.replaceChildren(
@@ -66,6 +66,11 @@ export function renderNowPlaying(el, track, { controls, onControl, onError }) {
       ctrl(track.isPlaying ? "⏸" : "▶", track.isPlaying ? "pause" : "play", track.isPlaying ? "Jeda" : "Putar"),
       ctrl("⏭", "next", "Berikutnya"),
     ) : "", // replaceChildren would print false/null as text
+    next ? h("div", { className: "np-next" },
+      h("span", { className: "muted", textContent: "Berikutnya" }),
+      art(next.art, "art next-art"),
+      h("span", { className: "grow", textContent: `${next.title} — ${next.artist}` }),
+    ) : "",
   );
 }
 

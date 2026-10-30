@@ -134,6 +134,12 @@ async function loadRoom() {
   $("#members").replaceChildren(el("span", { className: "stack" }, ...people.slice(0, 6).map((m) => av(m.name, m.avatar))), el("span", { textContent: `${people.length} di room`, style: "margin-left:8px" }));
 
   const items = Object.entries(queue ?? {}).map(([key, v]) => ({ key, ...v })).sort((x, y) => x.order - y.order || x.at - y.at);
+  // Up next: the room queue plays first, then Spotify's own list.
+  const later = (t?.upcoming ?? []).filter((x) => x.id !== t?.id);
+  const nx = items.find((x) => x.id !== t?.id) ?? later[0];
+  $("#next").replaceChildren(...(nx ? [el("span", { textContent: "Berikutnya:", style: "opacity:.6" }), el("span", { textContent: `${nx.title} — ${nx.artist}`, style: "overflow:hidden;text-overflow:ellipsis;white-space:nowrap" })] : []));
+  $("#upnext-h").hidden = !later.length;
+  $("#upnext").replaceChildren(...later.slice(0, 6).map((x) => el("li", {}, cover(x.art), el("div", { className: "q-t" }, el("b", { textContent: x.title }), el("span", { textContent: x.artist })))));
   $("#queue").replaceChildren(...(items.length
     ? items.map((it) => el("li", {}, cover(it.art), el("div", { className: "q-t" }, el("b", { textContent: it.title }), el("span", { textContent: it.artist })), av(it.name, it.avatar),
         it.by === a.uid || info.settings?.guestControl ? Object.assign(el("button", { type: "button", textContent: "✕", title: "Hapus" }), {

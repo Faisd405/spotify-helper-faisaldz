@@ -120,7 +120,11 @@
     .q-text span { font-size: .75rem; }
     .empty { justify-content: center; padding: 8px; font-size: .8rem; }
     .pending { font-size: .8rem; }
-    #upcoming-wrap summary { cursor: pointer; font-size: .7rem; letter-spacing: .1em; text-transform: uppercase; opacity: .6; margin-bottom: 6px; }
+    #upcoming-wrap li { opacity: .8; }
+    .np-next { display: flex; align-items: center; gap: 8px; margin-top: 10px; padding-top: 10px; border-top: 1px solid #ffffff14; font-size: .8rem; }
+    .np-next .muted { font-size: .7rem; letter-spacing: .06em; text-transform: uppercase; flex: none; }
+    .np-next .grow { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .next-art { width: 24px; height: 24px; }
     #host-settings { display: grid; gap: 8px; }
     #host-settings[hidden], #me-name[hidden] { display: none; }
     .toggle { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: .85rem; }
@@ -221,7 +225,10 @@
           <ul id="pending"></ul>
           <ul id="queue"></ul>
         </div>
-        <details id="upcoming-wrap"><summary>Lalu dari Spotify</summary><ul id="upcoming"></ul></details>
+        <div id="upcoming-wrap">
+          <h4>Up next dari Spotify</h4>
+          <ul id="upcoming"></ul>
+        </div>
         <div id="host-settings" hidden>
           <h4>Pengaturan room</h4>
           <label class="toggle">Tamu boleh mengontrol pemutaran <input type="checkbox" id="set-guest" /></label>

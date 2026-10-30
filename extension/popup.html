@@ -29,6 +29,9 @@
     .stack { display: flex; }
     .av { width: 22px; height: 22px; border-radius: 50%; object-fit: cover; display: inline-grid; place-items: center; font-size: 9px; font-weight: 700; margin-right: -6px; border: 2px solid #121212; }
     h4 { margin: 0; font-size: 10px; letter-spacing: .1em; text-transform: uppercase; opacity: .6; }
+    #upnext { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; max-height: 120px; overflow-y: auto; opacity: .8; }
+    #upnext li { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+    #upnext img, #upnext .ph { width: 26px; height: 26px; border-radius: 4px; object-fit: cover; flex: none; background: #333; }
     #queue { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; max-height: 170px; overflow-y: auto; }
     #queue li { display: flex; align-items: center; gap: 8px; font-size: 12px; }
     #queue img, #queue .ph { width: 30px; height: 30px; border-radius: 4px; object-fit: cover; flex: none; background: #333; }
@@ -64,8 +67,11 @@
       <button type="button" data-a="next" title="Berikutnya">⏭</button>
     </div>
     <div class="members" id="members"></div>
+    <div class="members" id="next"></div>
     <h4>Antrian</h4>
     <ul id="queue"></ul>
+    <h4 id="upnext-h">Up next dari Spotify</h4>
+    <ul id="upnext"></ul>
   </section>
   <section id="requests" hidden>
     <b>Tambah lagu</b>

@@ -152,6 +152,8 @@
   const say = (text) => { status = text; renderStatus(); };
   const isHost = () => mode === "host";
   const guestCtl = () => !!room.settings?.guestControl;
+  // Spotify's own "up next" (after the room queue): from the player as host, from the room as listener.
+  const upNext = () => (isHost() ? spotifyUpcoming() : room.track?.upcoming ?? []);
   const sortedQueue = () => Object.entries(queue).map(([key, v]) => ({ key, ...v })).sort((a, b) => a.order - b.order || a.at - b.at);
   const nextOrder = () => Math.max(0, ...Object.values(queue).map((q) => q.order)) + 1;
 
@@ -309,9 +311,11 @@
   let endTimer;
 
   async function startListen(c) {
+    // Sign in before switching modes: the 1 s follow loop would otherwise send a heartbeat for uid null,
+    // get a 401 and treat it as a kick.
+    uid = (await getAuth()).uid;
     mode = "listen";
     code = c;
-    uid = (await getAuth()).uid;
     store.set("la:mode", "listen");
     store.set("la:room", c);
     lastBeat = 0;
@@ -402,10 +406,10 @@
   // Runs fn, reporting errors; skips a call while the previous one is still in flight (slow network).
   const guard = (fn) => {
     let busy = false;
-    return async () => {
+    return async (...args) => { // pass arguments through: the context menu hands over the clicked uris
       if (busy) return;
       busy = true;
-      try { await fn(); } catch (err) { say(`Error: ${err.message}`); } finally { busy = false; }
+      try { await fn(...args); } catch (err) { say(`Error: ${err.message}`); notify(`Listen Along: ${err.message}`, true); } finally { busy = false; }
     };
   };
   const followLoop = guard(follow); // each is a no-op unless in that mode
@@ -419,19 +423,23 @@
   Player.addEventListener("onplaypause", publishNow);
 
   // Right-click a song anywhere in Spotify -> add it to the room.
-  new Spicetify.ContextMenu.Item(
-    "Tambah ke antrian room",
-    guard(async (uris) => {
-      for (const u of uris) {
-        const id = trackId(u);
-        if (!id) continue;
-        if (isHost()) await addToRoomQueue(await resolveTrack(`spotify:track:${id}`), { uid, ...(await myProfile()) });
-        else await db(`requests/${code}`, "POST", { by: uid, name: await myName(), text: `https://open.spotify.com/track/${id}`, at: TS });
+  const trackUris = (uris) => (Array.isArray(uris) ? uris : [uris]).filter((u) => trackId(u));
+  const contextAdd = guard(async (uris) => {
+    let added = 0;
+    for (const u of trackUris(uris)) {
+      if (isHost()) {
+        const t = await resolveTrack(u);
+        if (!t) continue;
+        await addToRoomQueue(t, { uid, ...(await myProfile()) });
+      } else {
+        await db(`requests/${code}`, "POST", { by: uid, name: await myName(), text: `https://open.spotify.com/track/${trackId(u)}`, at: TS });
       }
-      notify(isHost() ? "Ditambahkan ke antrian room" : "Request dikirim ke host");
-    }),
-    (uris) => !!code && uris.some((u) => trackId(u)),
-  ).register();
+      added++;
+    }
+    notify(added ? (isHost() ? "Ditambahkan ke antrian room" : "Request dikirim ke host") : "Lagu tidak bisa ditambahkan", !added);
+  });
+  const contextItem = new Spicetify.ContextMenu.Item("Tambah ke antrian room", contextAdd, (uris) => !!code && trackUris(uris).length > 0);
+  contextItem.register();
 
   // ---------- UI: Jam-style side panel ----------
 
@@ -475,6 +483,10 @@
     #la-panel .toggle { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 13px; }
     #la-panel .hero { text-align: center; display: grid; gap: 10px; padding: 12px 0; }
     #la-panel .status { font-size: 12px; opacity: .7; }
+    #la-panel .nx { display: flex; align-items: center; gap: 8px; margin-top: 10px; padding-top: 10px; border-top: 1px solid #ffffff14; font-size: 12px; }
+    #la-panel .nx .muted { font-size: 10px; letter-spacing: .08em; flex: none; }
+    #la-panel .nx img { width: 22px; height: 22px; border-radius: 3px; object-fit: cover; }
+    #la-panel .nx-t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   `;
   const h = (tag, props = {}, ...kids) => {
     const e = Object.assign(document.createElement(tag), props);
@@ -586,6 +598,11 @@
         h("div", { className: "np-t" }, h("b", { textContent: t.title }), h("span", { className: "muted", textContent: t.artist }),
           h("div", { className: "bar" }, h("i")), h("span", { className: "muted pos", style: "font-size:11px" })),
       ) : h("span", { className: "muted", textContent: "Belum ada lagu yang diputar." }),
+      (() => {
+        const nx = sortedQueue().find((it) => it.id !== t?.id) ?? upNext().find((it) => it.id !== t?.id);
+        return t && nx ? h("div", { className: "nx" }, h("span", { className: "muted", textContent: "BERIKUTNYA" }),
+          nx.art ? h("img", { src: nx.art, alt: "" }) : null, h("span", { className: "nx-t", textContent: `${nx.title} — ${nx.artist}` })) : null;
+      })(),
       t && controls ? h("div", { className: "ctrls" },
         btn("⏮", () => control("prev"), "", "Sebelumnya"),
         btn(t.isPlaying ? "⏸" : "▶", () => control(t.isPlaying ? "pause" : "play"), "", t.isPlaying ? "Jeda" : "Putar"),
@@ -649,6 +666,12 @@
       ))) : h("span", { className: "muted", style: "font-size:12px", textContent: "Antrian room kosong. Klik kanan lagu mana pun → Tambah ke antrian room." }),
     ));
 
+    const later = upNext().slice(0, 8);
+    if (later.length) body.append(h("div", {}, h("h4", { textContent: "Up next dari Spotify" }), h("ul", {}, ...later.map((it) => h("li", { style: "opacity:.8" },
+      it.art ? h("img", { className: "q-art", src: it.art, alt: "" }) : h("span", { className: "q-art" }),
+      h("div", { className: "q-t" }, h("b", { textContent: it.title }), h("span", { textContent: it.artist })),
+    )))));
+
     if (isHost()) {
       const toggle = (label, keyName) => {
         const input = h("input", { type: "checkbox", checked: !!settings[keyName] });
@@ -684,7 +707,7 @@
   if (savedMode === "listen" && savedRoom) startListen(savedRoom);
 
   globalThis.ListenAlong = { // devtools / tests
-    startHost, startListen, endHost, stop, follow, publish, control, openPanel, pullRoomData, advanceCheck,
+    startHost, startListen, endHost, stop, follow, publish, control, openPanel, pullRoomData, advanceCheck, contextAdd,
     get state() { return { mode, code, uid, status, serverOffset, room, members, queue, requests, settings }; },
   };
 })();
