@@ -295,6 +295,7 @@
       justPlayed = null;
       polledId = t.id;
       publish(); // instant song changes
+      render(); // now playing card / mini player
     }
     const next = sortedQueue().find((it) => it.id !== t.id);
     const left = t.durationSec * 1000 - t.progressMs;
@@ -418,9 +419,9 @@
   setInterval(guard(handleCommands), 1000);
   setInterval(guard(pullRoomData), 2000);
   setInterval(guard(async () => advanceCheck()), 400);
-  setInterval(() => panelEl?.isConnected && panelOpen && renderProgress(), 1000);
+  setInterval(() => (panelEl?.isConnected && panelOpen ? renderProgress() : renderMini()), 1000);
   const publishNow = guard(publish);
-  Player.addEventListener("onplaypause", publishNow);
+  Player.addEventListener("onplaypause", () => { publishNow(); setTimeout(render, 150); }); // play/pause icon + mini player
 
   // Right-click a song anywhere in Spotify -> add it to the room.
   const trackUris = (uris) => (Array.isArray(uris) ? uris : [uris]).filter((u) => trackId(u));
@@ -441,68 +442,159 @@
   const contextItem = new Spicetify.ContextMenu.Item("Tambah ke antrian room", contextAdd, (uris) => !!code && trackUris(uris).length > 0);
   contextItem.register();
 
-  // ---------- UI: Jam-style side panel ----------
+  // ---------- UI: Jam-style side panel + mini player ----------
+  // Colours follow the active Spicetify theme (--spice-*), with Spotify's defaults as fallback.
 
   const css = `
-    #la-panel { position: fixed; top: 64px; right: 8px; bottom: 96px; width: 340px; z-index: 1000; background: #121212; color: #fff;
-      border-radius: 10px; box-shadow: 0 8px 32px #000c; display: flex; flex-direction: column; font: 14px var(--font-family, system-ui), sans-serif; }
-    #la-panel[hidden] { display: none; }
-    #la-panel .la-head { display: flex; align-items: center; gap: 8px; padding: 12px 14px; border-bottom: 1px solid #ffffff14; }
-    #la-panel .la-head b { flex: 1; }
-    #la-panel .la-body { overflow-y: auto; padding: 12px 14px; display: grid; gap: 16px; align-content: start; }
-    #la-panel h4 { margin: 0 0 8px; font-size: 11px; letter-spacing: .1em; text-transform: uppercase; opacity: .6; }
-    #la-panel button { border: 0; border-radius: 999px; padding: 7px 14px; font-weight: 700; cursor: pointer; background: #1db954; color: #000; }
-    #la-panel button.sec { background: #2a2a2a; color: #fff; }
-    #la-panel button.icon { background: transparent; color: #fff; padding: 4px 7px; opacity: .7; }
-    #la-panel button.icon:hover { opacity: 1; background: #ffffff14; }
+    #la-panel, #la-mini { --la-bg: var(--spice-main, #121212); --la-card: var(--spice-card, #1f1f1f); --la-hi: var(--spice-highlight, #2a2a2a);
+      --la-text: var(--spice-text, #fff); --la-sub: var(--spice-subtext, #b3b3b3); --la-accent: var(--spice-button, #1ed760);
+      --la-on-accent: var(--spice-main, #000); font-family: var(--font-family, CircularSp, system-ui), sans-serif; color: var(--la-text); }
+    #la-panel { position: fixed; top: 64px; right: 8px; bottom: 96px; width: 360px; z-index: 1000; background: var(--la-bg);
+      border: 1px solid #ffffff14; border-radius: 12px; box-shadow: 0 16px 48px #000b; display: flex; flex-direction: column;
+      transition: transform .22s ease, opacity .22s ease; }
+    #la-panel.la-hidden { transform: translateX(24px); opacity: 0; pointer-events: none; }
+    .la-head { display: flex; align-items: center; gap: 10px; padding: 14px 16px 10px; }
+    .la-head .la-logo { width: 28px; height: 28px; border-radius: 50%; background: var(--la-accent); color: var(--la-on-accent); display: grid; place-items: center; flex: none; }
+    .la-head .la-title { flex: 1; font-weight: 800; font-size: 15px; }
+    .la-body { overflow-y: auto; padding: 4px 16px 16px; display: grid; gap: 18px; align-content: start; scrollbar-width: thin; }
+    .la-h { margin: 0 0 8px; font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--la-sub); display: flex; align-items: center; gap: 6px; }
+    .la-h .la-count { background: var(--la-hi); color: var(--la-text); border-radius: 999px; padding: 1px 7px; letter-spacing: 0; }
+    #la-panel button { font: inherit; border: 0; cursor: pointer; color: inherit; background: none; }
     #la-panel button:disabled { opacity: .5; cursor: progress; }
-    #la-panel input { padding: 8px 10px; border-radius: 8px; border: 1px solid #ffffff22; background: #2a2a2a; color: #fff; min-width: 0; }
-    #la-panel .row { display: flex; gap: 6px; align-items: center; }
-    #la-panel .row > input { flex: 1; }
-    #la-panel .muted { opacity: .65; }
-    #la-panel .live { color: #1db954; font-size: 11px; font-weight: 800; letter-spacing: .1em; }
-    #la-panel .code { font-family: monospace; font-size: 16px; font-weight: 800; letter-spacing: .12em; flex: 1; }
-    #la-panel .card { background: #1e1e1e; border-radius: 10px; padding: 12px; }
-    #la-panel .np { display: flex; gap: 12px; align-items: center; }
-    #la-panel .np img, #la-panel .np .ph { width: 56px; height: 56px; border-radius: 6px; object-fit: cover; flex: none; background: #333; }
-    #la-panel .np-t { flex: 1; min-width: 0; display: grid; gap: 2px; }
-    #la-panel .np-t b, #la-panel .np-t span, #la-panel .q-t b, #la-panel .q-t span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    #la-panel .bar { height: 4px; background: #ffffff33; border-radius: 2px; margin-top: 6px; overflow: hidden; }
-    #la-panel .bar > i { display: block; height: 100%; background: #1db954; width: 0; }
-    #la-panel .ctrls { display: flex; justify-content: center; gap: 12px; margin-top: 10px; }
-    #la-panel .ctrls button { width: 36px; height: 36px; padding: 0; background: #ffffff14; color: #fff; }
-    #la-panel .ctrls button:nth-child(2) { background: #fff; color: #000; }
-    #la-panel ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
-    #la-panel li { display: flex; align-items: center; gap: 8px; }
-    #la-panel .av { width: 26px; height: 26px; border-radius: 50%; flex: none; object-fit: cover; display: inline-grid; place-items: center; font-size: 10px; font-weight: 700; }
-    #la-panel .av.xs { width: 18px; height: 18px; font-size: 8px; }
-    #la-panel .q-art { width: 36px; height: 36px; border-radius: 4px; object-fit: cover; flex: none; background: #333; }
-    #la-panel .q-t { flex: 1; min-width: 0; display: grid; font-size: 13px; }
-    #la-panel .q-t span { font-size: 11px; opacity: .65; }
-    #la-panel .badge { font-size: 9px; font-weight: 800; background: #1db954; color: #000; padding: 2px 5px; border-radius: 4px; }
-    #la-panel .toggle { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 13px; }
-    #la-panel .hero { text-align: center; display: grid; gap: 10px; padding: 12px 0; }
-    #la-panel .status { font-size: 12px; opacity: .7; }
-    #la-panel .nx { display: flex; align-items: center; gap: 8px; margin-top: 10px; padding-top: 10px; border-top: 1px solid #ffffff14; font-size: 12px; }
-    #la-panel .nx .muted { font-size: 10px; letter-spacing: .08em; flex: none; }
-    #la-panel .nx img { width: 22px; height: 22px; border-radius: 3px; object-fit: cover; }
-    #la-panel .nx-t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .la-btn { border-radius: 999px !important; padding: 8px 16px !important; font-weight: 700 !important; font-size: 13px !important; background: var(--la-accent) !important; color: var(--la-on-accent) !important; transition: transform .1s; }
+    .la-btn:hover { transform: scale(1.03); }
+    .la-btn.sec { background: var(--la-hi) !important; color: var(--la-text) !important; }
+    .la-btn.danger { background: transparent !important; color: #f3727f !important; border: 1px solid #f3727f55 !important; }
+    .la-ico { width: 32px; height: 32px; border-radius: 50% !important; display: inline-grid !important; place-items: center; color: var(--la-sub) !important; flex: none; }
+    .la-ico:hover { color: var(--la-text) !important; background: var(--la-hi) !important; }
+    .la-ico svg, .la-btn svg { width: 16px; height: 16px; fill: currentColor; }
+    #la-panel input[type=text] { width: 100%; box-sizing: border-box; padding: 9px 12px; border-radius: 8px; border: 1px solid transparent; background: var(--la-hi); color: var(--la-text); font: inherit; font-size: 13px; outline: none; }
+    #la-panel input[type=text]:focus { border-color: var(--la-sub); }
+    .la-row { display: flex; gap: 8px; align-items: center; }
+    .la-row > .la-grow, .la-grow { flex: 1; min-width: 0; }
+    .la-sub { color: var(--la-sub); }
+    .la-ell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .la-card { background: var(--la-card); border-radius: 10px; padding: 14px; }
+    /* hero */
+    .la-hero { text-align: center; display: grid; gap: 12px; padding: 20px 4px 8px; justify-items: center; }
+    .la-hero .la-big { width: 64px; height: 64px; border-radius: 50%; background: var(--la-hi); color: var(--la-accent); display: grid; place-items: center; }
+    .la-hero .la-big svg { width: 30px; height: 30px; fill: currentColor; }
+    .la-hero h2 { margin: 0; font-size: 20px; font-weight: 800; }
+    .la-or { display: flex; align-items: center; gap: 10px; width: 100%; color: var(--la-sub); font-size: 12px; }
+    .la-or::before, .la-or::after { content: ""; flex: 1; height: 1px; background: #ffffff1a; }
+    /* session */
+    .la-live { color: var(--la-accent); font-size: 10px; font-weight: 800; letter-spacing: .12em; display: inline-flex; align-items: center; gap: 5px; }
+    .la-live::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; animation: la-pulse 1.6s infinite; }
+    @keyframes la-pulse { 50% { opacity: .3; } }
+    .la-code { font-family: ui-monospace, Consolas, monospace; font-size: 22px; font-weight: 800; letter-spacing: .14em; }
+    .la-qr { display: grid; justify-items: center; gap: 8px; margin-top: 12px; }
+    .la-qr img { width: 168px; height: 168px; border-radius: 10px; background: #fff; padding: 6px; }
+    /* now playing */
+    .la-np { display: flex; gap: 14px; align-items: center; }
+    .la-np .la-art { width: 72px; height: 72px; border-radius: 8px; object-fit: cover; flex: none; background: var(--la-hi); box-shadow: 0 6px 16px #0007; }
+    .la-np-t { flex: 1; min-width: 0; display: grid; gap: 3px; }
+    .la-np-t b { font-size: 15px; }
+    .la-bar { height: 4px; background: #ffffff26; border-radius: 2px; margin-top: 8px; overflow: hidden; }
+    .la-bar > i { display: block; height: 100%; background: var(--la-text); width: 0; transition: width 1s linear; }
+    .la-times { display: flex; justify-content: space-between; font-size: 11px; color: var(--la-sub); margin-top: 4px; font-variant-numeric: tabular-nums; }
+    .la-ctrls { display: flex; justify-content: center; align-items: center; gap: 18px; margin-top: 12px; }
+    .la-ctrls .la-play { width: 40px; height: 40px; border-radius: 50% !important; background: var(--la-text) !important; color: var(--la-bg) !important; display: grid !important; place-items: center; }
+    .la-ctrls .la-play:hover { transform: scale(1.06); }
+    .la-ctrls .la-play svg { width: 18px; height: 18px; fill: currentColor; }
+    .la-next { display: flex; align-items: center; gap: 10px; margin-top: 12px; padding-top: 12px; border-top: 1px solid #ffffff14; font-size: 12px; }
+    .la-next img { width: 28px; height: 28px; border-radius: 4px; object-fit: cover; }
+    .la-tag { font-size: 10px; font-weight: 800; letter-spacing: .08em; color: var(--la-sub); flex: none; }
+    /* members */
+    .la-stack { display: flex; align-items: center; }
+    .la-stack .la-av { margin-right: -8px; border: 2px solid var(--la-bg); }
+    .la-av { width: 30px; height: 30px; border-radius: 50%; flex: none; object-fit: cover; display: inline-grid; place-items: center; font-size: 11px; font-weight: 800; color: #fff; }
+    .la-av.xs { width: 20px; height: 20px; font-size: 8px; }
+    .la-members-btn { display: flex !important; align-items: center; gap: 14px; width: 100%; padding: 6px !important; border-radius: 8px !important; text-align: left; }
+    .la-members-btn:hover { background: var(--la-hi) !important; }
+    .la-list { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 2px; }
+    .la-list li { display: flex; align-items: center; gap: 10px; padding: 6px; border-radius: 6px; font-size: 13px; }
+    .la-list li:hover { background: var(--la-hi); }
+    .la-badge { font-size: 9px; font-weight: 800; letter-spacing: .08em; background: var(--la-accent); color: var(--la-on-accent); padding: 2px 6px; border-radius: 4px; }
+    .la-chip { font-size: 11px; color: var(--la-sub); }
+    /* tabs + queue */
+    .la-tabs { display: flex; gap: 8px; margin-bottom: 10px; }
+    .la-tab { padding: 6px 14px !important; border-radius: 999px !important; background: var(--la-hi) !important; font-size: 13px !important; font-weight: 600 !important; }
+    .la-tab.on { background: var(--la-text) !important; color: var(--la-bg) !important; }
+    .la-add { position: relative; margin-bottom: 8px; }
+    .la-add svg { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); width: 14px; height: 14px; fill: var(--la-sub); }
+    .la-add input[type=text] { padding-left: 32px !important; }
+    .la-q li { display: flex; align-items: center; gap: 10px; padding: 6px; border-radius: 6px; }
+    .la-q li:hover { background: var(--la-hi); }
+    .la-q li.la-drag { opacity: .4; }
+    .la-q li[draggable=true] { cursor: grab; }
+    .la-q .la-n { width: 16px; text-align: center; font-size: 12px; color: var(--la-sub); flex: none; font-variant-numeric: tabular-nums; }
+    .la-q .la-qa { width: 40px; height: 40px; border-radius: 4px; object-fit: cover; flex: none; background: var(--la-hi); }
+    .la-q .la-qt { flex: 1; min-width: 0; display: grid; font-size: 13px; }
+    .la-q .la-qt span { font-size: 12px; color: var(--la-sub); }
+    .la-q .la-acts { display: flex; opacity: 0; transition: opacity .12s; }
+    .la-q li:hover .la-acts, .la-q li:focus-within .la-acts { opacity: 1; }
+    .la-q .la-acts .la-ico { width: 28px; height: 28px; }
+    .la-empty { text-align: center; color: var(--la-sub); font-size: 12px; padding: 14px 8px; line-height: 1.5; }
+    .la-pending { font-size: 12px; color: var(--la-sub); }
+    /* settings */
+    .la-set summary { cursor: pointer; list-style: none; }
+    .la-set summary::-webkit-details-marker { display: none; }
+    .la-switch { display: flex; justify-content: space-between; align-items: center; gap: 10px; font-size: 13px; padding: 8px 0; }
+    .la-switch input { appearance: none; width: 36px; height: 20px; border-radius: 999px; background: #535353; position: relative; cursor: pointer; flex: none; transition: background .15s; margin: 0; }
+    .la-switch input::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: left .15s; }
+    .la-switch input:checked { background: var(--la-accent); }
+    .la-switch input:checked::after { left: 18px; }
+    .la-status { font-size: 12px; color: var(--la-sub); min-height: 16px; }
+    /* mini player */
+    #la-mini { position: fixed; right: 16px; bottom: 104px; z-index: 1000; display: flex; align-items: center; gap: 10px; padding: 8px 14px 8px 8px;
+      background: var(--la-card); border: 1px solid #ffffff14; border-radius: 999px; box-shadow: 0 8px 24px #000a; cursor: pointer; max-width: 320px; }
+    #la-mini[hidden] { display: none; }
+    #la-mini img, #la-mini .la-ph { width: 36px; height: 36px; border-radius: 50%; object-fit: cover; flex: none; background: var(--la-hi); }
+    #la-mini .la-mt { min-width: 0; display: grid; font-size: 12px; }
   `;
+
+  // Small inline icons (fill: currentColor).
+  const SVG = {
+    logo: '<path d="M8 1a5 5 0 0 0-5 5v3H2v5h3V9H4V6a4 4 0 0 1 8 0v3h-1v5h3V9h-1V6a5 5 0 0 0-5-5z"/>',
+    close: '<path d="M2.5 2.5l11 11m0-11l-11 11" stroke="currentColor" stroke-width="1.6" fill="none"/>',
+    min: '<path d="M3 8h10" stroke="currentColor" stroke-width="1.8"/>',
+    copy: '<path d="M5 1h8a2 2 0 0 1 2 2v8h-2V3H5zM1 5a2 2 0 0 1 2-2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2z"/>',
+    qr: '<path d="M1 1h6v6H1zm2 2v2h2V3zm6-2h6v6H9zm2 2v2h2V3zM1 9h6v6H1zm2 2v2h2v-2zm6-2h2v2H9zm4 0h2v2h-2zm-2 2h2v2h-2zm-2 2h2v2H9zm4 0h2v2h-2z"/>',
+    play: '<path d="M4 2.5v11l10-5.5z"/>',
+    pause: '<path d="M3.5 2h3v12h-3zm6 0h3v12h-3z"/>',
+    prev: '<path d="M3 2h2v12H3zm2 6l9-6v12z"/>',
+    next: '<path d="M11 2h2v12h-2zm0 6L2 2v12z"/>',
+    up: '<path d="M8 3l5 6h-3v4H6V9H3z"/>',
+    trash: '<path d="M5 1h6v2h4v2H1V3h4zM2 6h12l-1 9H3z"/>',
+    search: '<path d="M7 1a6 6 0 1 1 0 12A6 6 0 0 1 7 1zm0 2a4 4 0 1 0 0 8 4 4 0 0 0 0-8zm4.3 8.9l1.4-1.4 3.3 3.3-1.4 1.4z"/>',
+    kick: '<path d="M6 7a3 3 0 1 0 0-6 3 3 0 0 0 0 6zm-6 8c0-3.3 2.7-6 6-6s6 2.7 6 6zm10-9h6v2h-6z"/>',
+  };
+  const icon = (name) => {
+    const s = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    s.setAttribute("viewBox", "0 0 16 16");
+    s.innerHTML = SVG[name]; // static, trusted markup
+    return s;
+  };
+
   const h = (tag, props = {}, ...kids) => {
     const e = Object.assign(document.createElement(tag), props);
     e.append(...kids.filter((k) => k != null && k !== false));
     return e;
   };
-  const btn = (label, fn, cls = "", title = "") => {
-    const b = h("button", { type: "button", textContent: label, className: cls, title });
-    b.onclick = async () => {
+  // Async-safe button: disabled while working, errors land in the status line.
+  const btn = (content, fn, cls = "la-btn", title = "") => {
+    const b = h("button", { type: "button", className: cls, title, ariaLabel: title || undefined });
+    b.append(...(Array.isArray(content) ? content : [content]).map((c) => (typeof c === "string" && SVG[c] ? icon(c) : c)));
+    b.onclick = async (e) => {
+      e.stopPropagation();
       b.disabled = true;
-      try { await fn(); } catch (e) { say(`Error: ${e.message}`); } finally { b.disabled = false; }
+      try { await fn(); } catch (err) { say(`Error: ${err.message}`); } finally { b.disabled = false; }
     };
     return b;
   };
+  const iconBtn = (name, fn, title) => btn(name, fn, "la-ico", title);
   const COLORS = ["#e91e63", "#9c27b0", "#3f51b5", "#03a9f4", "#009688", "#8bc34a", "#ff9800", "#ff5722"];
-  function av(name = "?", url = null, cls = "av") {
+  function av(name = "?", url = null, cls = "la-av") {
     if (url) {
       const img = h("img", { className: cls, src: url, alt: "", title: name });
       img.onerror = () => img.replaceWith(av(name, null, cls));
@@ -511,20 +603,33 @@
     const hash = [...name].reduce((a, c) => (a * 31 + c.charCodeAt(0)) >>> 0, 7);
     return h("span", { className: cls, textContent: name.trim().split(/\s+/).map((w) => w[0]).join("").slice(0, 2).toUpperCase(), title: name, style: `background:${COLORS[hash % COLORS.length]}` });
   }
+  const cover = (url, cls) => (url ? h("img", { className: cls, src: url, alt: "" }) : h("span", { className: cls }));
   const mmss = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+  const VIA = { web: "Web", youtube: "YouTube", spotify: "Spotify Web", spicetify: "Spotify" };
 
+  // View state that survives re-renders.
   let panelEl = null;
+  let miniEl = null;
   let panelOpen = false;
+  let tab = "queue"; // "queue" | "next"
+  let membersOpen = false;
+  let inviteOpen = false;
+  let dragKey = null;
+
   function ensurePanel() {
     if (panelEl?.isConnected) return panelEl;
     document.head.append(h("style", { textContent: css }));
-    panelEl = h("div", { id: "la-panel", hidden: true });
-    document.body.append(panelEl);
+    panelEl = h("div", { id: "la-panel", className: "la-hidden" });
+    miniEl = h("div", { id: "la-mini", hidden: true, title: "Buka Listen Along" });
+    miniEl.onclick = () => openPanel(true);
+    document.body.append(panelEl, miniEl);
     return panelEl;
   }
+  // open: show the panel. Closing while in a room leaves the mini player, like Jam's minimise.
   function openPanel(open = !panelOpen) {
     panelOpen = open;
-    ensurePanel().hidden = !open;
+    ensurePanel().classList.toggle("la-hidden", !open);
+    renderMini();
     if (open) render();
   }
 
@@ -534,96 +639,195 @@
     const others = Object.entries(members).filter(([u, l]) => u !== room.hostUid && now - l.at < 45_000).map(([u, l]) => ({ uid: u, ...l }));
     return (room.hostUid ? [host] : []).concat(others).map((m) => ({ ...m, isMe: m.uid === uid }));
   }
+  const currentTrack = () => (isHost() ? nowPlaying() : room.track);
 
   function renderStatus() {
-    const el = panelEl?.querySelector(".status");
+    const el = panelEl?.querySelector(".la-status");
     if (el) el.textContent = status;
   }
   function renderProgress() {
-    const bar = panelEl?.querySelector(".bar > i");
-    const t = isHost() ? nowPlaying() : room.track;
+    const t = currentTrack();
+    const bar = panelEl?.querySelector(".la-bar > i");
     if (!bar || !t) return;
     const pos = isHost() ? t.progressMs : t.progressMs + (t.isPlaying ? serverNow() - t.at : 0);
-    bar.style.width = `${Math.min(100, (pos / 10 / Math.max(1, t.durationSec)))}%`;
-    const el = panelEl.querySelector(".pos");
-    if (el) el.textContent = `${mmss(pos / 1000)} / ${mmss(t.durationSec)}`;
+    const sec = Math.min(pos / 1000, t.durationSec);
+    bar.style.width = `${t.durationSec ? (sec / t.durationSec) * 100 : 0}%`;
+    const times = panelEl.querySelector(".la-times");
+    if (times) times.replaceChildren(h("span", { textContent: mmss(sec) }), h("span", { textContent: mmss(t.durationSec) }));
+  }
+  function renderMini() {
+    if (!miniEl) return;
+    const t = currentTrack();
+    miniEl.hidden = panelOpen || !code;
+    if (miniEl.hidden) return;
+    miniEl.replaceChildren(
+      t?.art ? h("img", { src: t.art, alt: "" }) : h("span", { className: "la-ph" }),
+      h("div", { className: "la-mt" },
+        h("b", { className: "la-ell", textContent: t ? t.title : `Room ${code}` }),
+        h("span", { className: "la-sub la-ell", textContent: `${liveMembers().length} di room` })),
+      h("span", { className: "la-live", textContent: "LIVE" }),
+    );
   }
 
   function render() {
+    renderMini();
     if (!panelOpen) return;
     // The panel is rebuilt on every data change: keep what the user is typing (and the caret) across it.
     const kept = {};
     for (const el of panelEl.querySelectorAll("input[data-keep]")) {
       kept[el.dataset.keep] = { value: el.value, focused: el === document.activeElement, at: el.selectionStart };
     }
+    const scroll = panelEl.querySelector(".la-body")?.scrollTop ?? 0;
     const body = h("div", { className: "la-body" });
-    const head = h("div", { className: "la-head" }, h("b", { textContent: "Listen Along" }), btn("✕", () => openPanel(false), "icon", "Tutup"));
-    panelEl.replaceChildren(head, body);
-
-    if (!code) {
-      const codeIn = h("input", { placeholder: "Kode room atau link" });
-      codeIn.dataset.keep = "code";
-      const nameIn = h("input", { placeholder: "Nama (kosong = nama akun Spotify)", value: store.get("la:name") ?? "", maxLength: 40 });
-      nameIn.oninput = () => store.set("la:name", nameIn.value.trim());
-      body.append(h("div", { className: "hero" },
-        h("b", { textContent: "Dengar bareng, tetap sinkron", style: "font-size:18px" }),
-        h("span", { className: "muted", textContent: "Teman bisa ikut dari app Spotify, HP, web, atau YouTube." }),
-        btn("Buat room", () => startHost()),
-        h("span", { className: "muted", textContent: "atau gabung" }),
-        h("div", { className: "row" }, codeIn, btn("Gabung", () => {
-          const c = (codeIn.value.match(/room=([A-Za-z0-9]{6})/)?.[1] ?? codeIn.value.trim()).toUpperCase();
-          if (!/^[A-Z0-9]{6}$/.test(c)) return say("Kode room harus 6 huruf/angka.");
-          return startListen(c);
-        })),
-        nameIn,
-      ), h("div", { className: "status", textContent: status }));
-      return;
+    panelEl.replaceChildren(
+      h("div", { className: "la-head" },
+        h("span", { className: "la-logo" }, icon("logo")),
+        h("span", { className: "la-title" }, "Listen Along"),
+        code ? h("span", { className: "la-live", textContent: "LIVE" }) : null,
+        code ? iconBtn("min", () => openPanel(false), "Kecilkan ke mini player") : null,
+        iconBtn("close", () => openPanel(false), "Tutup"),
+      ),
+      body,
+    );
+    if (!code) renderHero(body);
+    else renderSession(body);
+    for (const el of panelEl.querySelectorAll("input[data-keep]")) {
+      const k = kept[el.dataset.keep];
+      if (!k) continue;
+      el.value = k.value;
+      if (k.focused) { el.focus(); el.setSelectionRange(k.at, k.at); }
     }
+    body.scrollTop = scroll;
+    renderProgress();
+  }
 
+  function renderHero(body) {
+    const codeIn = h("input", { type: "text", placeholder: "Kode room atau link" });
+    codeIn.dataset.keep = "code";
+    const nameIn = h("input", { type: "text", placeholder: "Nama tampilan (kosong = nama akun Spotify)", value: store.get("la:name") ?? "", maxLength: 40 });
+    nameIn.oninput = () => store.set("la:name", nameIn.value.trim());
+    const join = () => {
+      const c = (codeIn.value.match(/room=([A-Za-z0-9]{6})/)?.[1] ?? codeIn.value.trim()).toUpperCase();
+      if (!/^[A-Z0-9]{6}$/.test(c)) return say("Kode room harus 6 huruf/angka.");
+      return startListen(c);
+    };
+    codeIn.onkeydown = (e) => e.key === "Enter" && join();
+    body.append(
+      h("div", { className: "la-hero" },
+        h("div", { className: "la-big" }, icon("logo")),
+        h("h2", { textContent: "Dengar bareng, tetap sinkron" }),
+        h("span", { className: "la-sub", textContent: "Teman bisa ikut dari app Spotify, HP, web, atau YouTube, lengkap dengan lirik romaji." }),
+        btn("Buat room", () => startHost()),
+        h("div", { className: "la-or", textContent: "atau gabung" }),
+        h("div", { className: "la-row", style: "width:100%" }, h("div", { className: "la-grow" }, codeIn), btn("Gabung", join, "la-btn sec")),
+        h("div", { style: "width:100%" }, nameIn),
+      ),
+      h("div", { className: "la-status", textContent: status }),
+    );
+  }
+
+  function renderSession(body) {
     const link = `${CFG.siteUrl ?? ""}?room=${code}`;
-    const copy = () => Spicetify.Platform?.ClipboardAPI?.copy?.(link) ?? navigator.clipboard.writeText(link);
-    body.append(h("div", { className: "row" },
-      h("span", { className: "live", textContent: "● LIVE" }),
-      h("span", { className: "code", textContent: code }),
-      btn("Salin link", async () => { await copy(); notify("Link room disalin"); }, "sec"),
-      btn(isHost() ? "Akhiri" : "Keluar", () => (isHost() ? endHost() : (stop(), say("Keluar dari room."), render())), "sec"),
+    const copy = async () => {
+      await (Spicetify.Platform?.ClipboardAPI?.copy?.(link) ?? navigator.clipboard.writeText(link));
+      notify("Link room disalin");
+    };
+    const t = currentTrack();
+    const controls = isHost() || guestCtl();
+
+    // Room card: code, copy, invite (QR), end/leave.
+    const qr = inviteOpen ? h("div", { className: "la-qr" }, h("img", { alt: "QR untuk gabung room" }), h("span", { className: "la-sub la-ell", style: "max-width:100%;font-size:11px", textContent: link })) : null;
+    if (qr && globalThis.LA_QR) globalThis.LA_QR(link).then((src) => (qr.querySelector("img").src = src), () => {});
+    body.append(h("div", { className: "la-card" },
+      h("div", { className: "la-row" },
+        h("div", { className: "la-grow" }, h("div", { className: "la-sub", style: "font-size:11px", textContent: isHost() ? "Kode room Anda" : "Room" }), h("div", { className: "la-code", textContent: code })),
+        iconBtn("copy", copy, "Salin link"),
+        iconBtn("qr", () => { inviteOpen = !inviteOpen; render(); }, "Undang dengan QR"),
+      ),
+      qr,
+      h("div", { className: "la-row", style: "margin-top:12px" },
+        btn("Salin link undangan", copy, "la-btn sec la-grow"),
+        btn(isHost() ? "Akhiri" : "Keluar", () => (isHost() ? endHost() : (stop(), say("Keluar dari room."), render())), "la-btn danger"),
+      ),
     ));
 
-    // now playing
-    const t = isHost() ? nowPlaying() : room.track;
-    const controls = isHost() || guestCtl();
-    body.append(h("div", {}, h("h4", { textContent: "Sedang diputar" }), h("div", { className: "card" },
-      t ? h("div", { className: "np" },
-        t.art ? h("img", { src: t.art, alt: "" }) : h("span", { className: "ph" }),
-        h("div", { className: "np-t" }, h("b", { textContent: t.title }), h("span", { className: "muted", textContent: t.artist }),
-          h("div", { className: "bar" }, h("i")), h("span", { className: "muted pos", style: "font-size:11px" })),
-      ) : h("span", { className: "muted", textContent: "Belum ada lagu yang diputar." }),
-      (() => {
-        const nx = sortedQueue().find((it) => it.id !== t?.id) ?? upNext().find((it) => it.id !== t?.id);
-        return t && nx ? h("div", { className: "nx" }, h("span", { className: "muted", textContent: "BERIKUTNYA" }),
-          nx.art ? h("img", { src: nx.art, alt: "" }) : null, h("span", { className: "nx-t", textContent: `${nx.title} — ${nx.artist}` })) : null;
-      })(),
-      t && controls ? h("div", { className: "ctrls" },
-        btn("⏮", () => control("prev"), "", "Sebelumnya"),
-        btn(t.isPlaying ? "⏸" : "▶", () => control(t.isPlaying ? "pause" : "play"), "", t.isPlaying ? "Jeda" : "Putar"),
-        btn("⏭", () => control("next"), "", "Berikutnya"),
+    // Now playing.
+    const nx = sortedQueue().find((it) => it.id !== t?.id) ?? upNext().find((it) => it.id !== t?.id);
+    body.append(h("div", {}, h("div", { className: "la-h", textContent: "Sedang diputar" }), h("div", { className: "la-card" },
+      t ? h("div", { className: "la-np" },
+        cover(t.art, "la-art"),
+        h("div", { className: "la-np-t" },
+          h("b", { className: "la-ell", textContent: t.title }),
+          h("span", { className: "la-sub la-ell", textContent: t.artist }),
+          h("div", { className: "la-bar" }, h("i")),
+          h("div", { className: "la-times" }),
+        ),
+      ) : h("div", { className: "la-empty", textContent: isHost() ? "Putar lagu di Spotify untuk memulai." : "Host belum memutar lagu." }),
+      t && controls ? h("div", { className: "la-ctrls" },
+        iconBtn("prev", () => control("prev"), "Sebelumnya"),
+        btn(t.isPlaying ? "pause" : "play", () => control(t.isPlaying ? "pause" : "play"), "la-play", t.isPlaying ? "Jeda" : "Putar"),
+        iconBtn("next", () => control("next"), "Berikutnya"),
       ) : null,
+      t && nx ? h("div", { className: "la-next" }, h("span", { className: "la-tag", textContent: "BERIKUTNYA" }), cover(nx.art, ""), h("span", { className: "la-ell la-grow", textContent: `${nx.title} — ${nx.artist}` })) : null,
     )));
 
-    // members
+    // Members.
     const list = liveMembers();
-    body.append(h("div", {}, h("h4", { textContent: `Di room (${list.length})` }), h("ul", {}, ...list.map((m) => h("li", {},
-      av(m.name, m.avatar),
-      h("span", { style: "flex:1;min-width:0", textContent: m.name + (m.isMe ? " (Anda)" : "") }),
-      m.isHost ? h("span", { className: "badge", textContent: "HOST" }) : h("span", { className: "muted", style: "font-size:11px", textContent: m.via }),
-      isHost() && !m.isHost ? btn("Kick", async () => {
-        await db("", "PATCH", { [`kicked/${code}/${m.uid}`]: true, [`listeners/${code}/${m.uid}`]: null });
-        await pullRoomData();
-      }, "sec") : null,
-    )))));
+    body.append(h("div", {},
+      h("button", { type: "button", className: "la-members-btn", title: "Lihat siapa saja di room", onclick: () => { membersOpen = !membersOpen; render(); } },
+        h("span", { className: "la-stack" }, ...list.slice(0, 5).map((m) => av(m.name, m.avatar))),
+        h("span", { className: "la-grow" }, h("b", { textContent: `${list.length} di room` }), h("span", { className: "la-sub", textContent: membersOpen ? "  · sembunyikan" : "  · lihat" })),
+      ),
+      membersOpen ? h("ul", { className: "la-list" }, ...list.map((m) => h("li", {},
+        av(m.name, m.avatar),
+        h("span", { className: "la-grow la-ell", textContent: m.name + (m.isMe ? " (Anda)" : "") }),
+        m.isHost ? h("span", { className: "la-badge", textContent: "HOST" }) : h("span", { className: "la-chip", textContent: VIA[m.via] ?? m.via }),
+        isHost() && !m.isHost ? iconBtn("kick", async () => {
+          if (!confirm(`Keluarkan ${m.name} dari room?`)) return;
+          await db("", "PATCH", { [`kicked/${code}/${m.uid}`]: true, [`listeners/${code}/${m.uid}`]: null });
+          await pullRoomData();
+        }, `Keluarkan ${m.name}`) : null,
+      ))) : null,
+    ));
 
-    // queue + add
-    const addIn = h("input", { placeholder: "Tambah lagu: judul atau link", maxLength: 200 });
+    // Queue / Up next tabs.
+    const items = sortedQueue();
+    const later = upNext().filter((it) => it.id !== t?.id).slice(0, 10);
+    const tabBtn = (id, label) => h("button", { type: "button", className: `la-tab${tab === id ? " on" : ""}`, textContent: label, onclick: () => { tab = id; render(); } });
+    const section = h("div", {}, h("div", { className: "la-tabs" }, tabBtn("queue", `Antrian room · ${items.length}`), tabBtn("next", "Up next")));
+    if (tab === "queue") renderQueueTab(section, items, controls);
+    else section.append(later.length
+      ? h("ul", { className: "la-list la-q" }, ...later.map((it, i) => h("li", {},
+          h("span", { className: "la-n", textContent: i + 1 }),
+          cover(it.art, "la-qa"),
+          h("div", { className: "la-qt" }, h("b", { className: "la-ell", textContent: it.title }), h("span", { className: "la-ell", textContent: it.artist })),
+        )))
+      : h("div", { className: "la-empty", textContent: "Spotify belum punya lagu berikutnya." }));
+    body.append(section);
+
+    if (isHost()) {
+      const toggle = (label, keyName) => {
+        const input = h("input", { type: "checkbox", checked: !!settings[keyName] });
+        input.onchange = () => {
+          settings = { ...settings, [keyName]: input.checked };
+          store.set("la:settings", JSON.stringify(settings));
+          publishNow();
+        };
+        return h("label", { className: "la-switch" }, h("span", { textContent: label }), input);
+      };
+      const set = h("details", { className: "la-set", open: !!store.get("la:set-open") },
+        h("summary", { className: "la-h", textContent: "Pengaturan room ▾" }),
+        toggle("Tamu boleh mengontrol pemutaran", "guestControl"),
+        toggle("Lagu dari tamu perlu disetujui", "approval"),
+      );
+      set.ontoggle = () => (set.open ? store.set("la:set-open", "1") : store.remove("la:set-open"));
+      body.append(set);
+    }
+    body.append(h("div", { className: "la-status", textContent: status }));
+  }
+
+  function renderQueueTab(section, items, controls) {
+    const addIn = h("input", { type: "text", placeholder: "Cari lagu atau tempel link Spotify", maxLength: 200 });
     addIn.dataset.keep = "add";
     const add = async () => {
       const text = addIn.value.trim();
@@ -637,68 +841,54 @@
         await pullRoomData();
       }
       // The panel may have re-rendered while this was saving: clear the input that is on screen now.
-      for (const el of [addIn, panelEl.querySelector("input[data-keep=\"add\"]")]) if (el) el.value = "";
+      for (const el of [addIn, panelEl.querySelector('input[data-keep="add"]')]) if (el) el.value = "";
+      notify(isHost() ? "Ditambahkan ke antrian room" : "Request dikirim ke host");
     };
     addIn.onkeydown = (e) => e.key === "Enter" && add().catch((err) => say(`Error: ${err.message}`));
-    const items = sortedQueue();
+    section.append(h("div", { className: "la-row la-add" }, icon("search"), h("div", { className: "la-grow" }, addIn), btn("Tambah", add)));
+
     const pend = Object.entries(requests).map(([key, r]) => ({ key, ...r })).sort((a, b) => a.at - b.at);
-    body.append(h("div", {},
-      h("h4", { textContent: "Antrian" }),
-      h("div", { className: "row", style: "margin-bottom:8px" }, addIn, btn("Tambah", add)),
-      h("ul", {}, ...pend.map((r) => h("li", { style: "font-size:12px" },
-        h("span", { style: "flex:1;min-width:0", textContent: `${r.track ? `${r.track.title} — ${r.track.artist}` : r.text} · ${r.name} · ${r.status === "notfound" ? "tidak ketemu" : r.track ? "menunggu persetujuan" : "mencari…"}` }),
-        isHost() && r.track ? btn("Setujui", () => approve(r.key)) : null,
-        isHost() || r.by === uid ? btn("✕", async () => { await db(`requests/${code}/${r.key}`, "DELETE"); await pullRoomData(); }, "icon", "Hapus") : null,
-      ))),
-      items.length ? h("ul", {}, ...items.map((it, i) => h("li", {},
-        it.art ? h("img", { className: "q-art", src: it.art, alt: "" }) : h("span", { className: "q-art" }),
-        h("div", { className: "q-t" }, h("b", { textContent: it.title }), h("span", { textContent: it.durationSec ? `${it.artist} · ${mmss(it.durationSec)}` : it.artist })),
-        av(it.name, it.avatar, "av xs"),
-        controls && i > 0 ? btn("↑", async () => {
-          const rest = items.filter((x) => x.key !== it.key);
-          const before = rest[i - 2]?.order, after = rest[i - 1]?.order;
-          const order = before == null ? after - 1 : (before + after) / 2;
-          await db(`queues/${code}/${it.key}/order`, "PUT", order);
-          await pullRoomData();
-        }, "icon", "Naikkan") : null,
-        controls ? btn("▶", () => (isHost() ? playItem(it.key) : control("playItem", { key: it.key })), "icon", "Putar sekarang") : null,
-        isHost() || guestCtl() || it.by === uid ? btn("✕", async () => { await db(`queues/${code}/${it.key}`, "DELETE"); await pullRoomData(); }, "icon", "Hapus") : null,
-      ))) : h("span", { className: "muted", style: "font-size:12px", textContent: "Antrian room kosong. Klik kanan lagu mana pun → Tambah ke antrian room." }),
-    ));
+    if (pend.length) section.append(h("ul", { className: "la-list" }, ...pend.map((r) => h("li", { className: "la-pending" },
+      av(r.name, null, "la-av xs"),
+      h("span", { className: "la-grow la-ell", textContent: `${r.track ? `${r.track.title} — ${r.track.artist}` : r.text} · ${r.status === "notfound" ? "tidak ketemu" : r.track ? "menunggu persetujuan" : "mencari…"}` }),
+      isHost() && r.track ? btn("Setujui", () => approve(r.key), "la-btn") : null,
+      isHost() || r.by === uid ? iconBtn("trash", async () => { await db(`requests/${code}/${r.key}`, "DELETE"); await pullRoomData(); }, "Hapus") : null,
+    ))));
 
-    const later = upNext().slice(0, 8);
-    if (later.length) body.append(h("div", {}, h("h4", { textContent: "Up next dari Spotify" }), h("ul", {}, ...later.map((it) => h("li", { style: "opacity:.8" },
-      it.art ? h("img", { className: "q-art", src: it.art, alt: "" }) : h("span", { className: "q-art" }),
-      h("div", { className: "q-t" }, h("b", { textContent: it.title }), h("span", { textContent: it.artist })),
-    )))));
-
-    if (isHost()) {
-      const toggle = (label, keyName) => {
-        const input = h("input", { type: "checkbox", checked: !!settings[keyName] });
-        input.onchange = () => {
-          settings = { ...settings, [keyName]: input.checked };
-          store.set("la:settings", JSON.stringify(settings));
-          publishNow();
-        };
-        return h("label", { className: "toggle" }, label, input);
-      };
-      body.append(h("div", { style: "display:grid;gap:8px" }, h("h4", { textContent: "Pengaturan room" }),
-        toggle("Tamu boleh mengontrol pemutaran", "guestControl"),
-        toggle("Lagu dari tamu perlu disetujui", "approval"),
-      ));
+    if (!items.length) {
+      section.append(h("div", { className: "la-empty", textContent: "Antrian room kosong. Cari lagu di atas, atau klik kanan lagu mana pun di Spotify → Tambah ke antrian room." }));
+      return;
     }
-    body.append(h("div", { className: "status", textContent: status }));
-    for (const el of panelEl.querySelectorAll("input[data-keep]")) {
-      const k = kept[el.dataset.keep];
-      if (!k) continue;
-      el.value = k.value;
-      if (k.focused) { el.focus(); el.setSelectionRange(k.at, k.at); }
-    }
-    renderProgress();
+    const setOrder = async (key, toIndex) => {
+      const rest = items.filter((x) => x.key !== key);
+      const before = rest[toIndex - 1]?.order, after = rest[toIndex]?.order;
+      const order = before == null ? (after ?? 0) - 1 : after == null ? before + 1 : (before + after) / 2;
+      await db(`queues/${code}/${key}/order`, "PUT", order);
+      await pullRoomData();
+    };
+    section.append(h("ul", { className: "la-list la-q" }, ...items.map((it, i) => {
+      const li = h("li", { draggable: controls },
+        h("span", { className: "la-n", textContent: i + 1 }),
+        cover(it.art, "la-qa"),
+        h("div", { className: "la-qt" }, h("b", { className: "la-ell", textContent: it.title }), h("span", { className: "la-ell", textContent: it.durationSec ? `${it.artist} · ${mmss(it.durationSec)}` : it.artist })),
+        av(it.name, it.avatar, "la-av xs"),
+        h("span", { className: "la-acts" },
+          controls && i > 0 ? iconBtn("up", () => setOrder(it.key, i - 1), "Naikkan") : null,
+          controls ? iconBtn("play", () => (isHost() ? playItem(it.key) : control("playItem", { key: it.key })), "Putar sekarang") : null,
+          isHost() || guestCtl() || it.by === uid ? iconBtn("trash", async () => { await db(`queues/${code}/${it.key}`, "DELETE"); await pullRoomData(); }, "Hapus") : null,
+        ),
+      );
+      if (controls) {
+        li.ondragstart = (e) => { dragKey = it.key; e.dataTransfer.effectAllowed = "move"; li.classList.add("la-drag"); };
+        li.ondragend = () => li.classList.remove("la-drag");
+        li.ondragover = (e) => e.preventDefault();
+        li.ondrop = (e) => { e.preventDefault(); if (dragKey && dragKey !== it.key) setOrder(dragKey, i).catch((err) => say(`Error: ${err.message}`)); dragKey = null; };
+      }
+      return li;
+    })));
   }
 
-  const ICON = '<svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1a5 5 0 0 0-5 5v3H2v5h3V9H4V6a4 4 0 0 1 8 0v3h-1v5h3V9h-1V6a5 5 0 0 0-5-5z"/></svg>';
-  new Spicetify.Topbar.Button("Listen Along", ICON, () => openPanel());
+  new Spicetify.Topbar.Button("Listen Along", `<svg viewBox="0 0 16 16" fill="currentColor">${SVG.logo}</svg>`, () => openPanel());
 
   // Resume after Spotify restarts.
   const savedMode = store.get("la:mode");

@@ -1,18 +1,30 @@
 import fs from "node:fs";
-import { loadEnv } from "vite";
+import { loadEnv, build } from "vite";
 import { zipSync, strToU8 } from "fflate";
 
 const ZIP = "spotify-helper-extension.zip";
 const SPICETIFY = "spicetify-listen-along.js";
 
-// The Spicetify extension is one file; prepend the same public config the web app ships.
-function spicetifyFile(env) {
+// The QR generator for the Spicetify panel, bundled once into a self-contained IIFE (qrcode has no
+// browser build of its own, and Spicetify extensions are a single plain file).
+let qrBundle;
+function qrIife() {
+  qrBundle ??= build({
+    configFile: false,
+    logLevel: "silent",
+    build: { write: false, minify: true, lib: { entry: "spicetify/qr-entry.js", formats: ["iife"], name: "LAQR", fileName: "qr" } },
+  }).then((out) => [out].flat()[0].output[0].code);
+  return qrBundle;
+}
+
+// The Spicetify extension is one file: QR helper + the same public config the web app ships + the code.
+async function spicetifyFile(env) {
   const config = {
     dbUrl: (env.VITE_FIREBASE_DATABASE_URL ?? "").replace(/\/$/, ""),
     apiKey: env.VITE_FIREBASE_API_KEY ?? "",
     siteUrl: env.VITE_SITE_URL ?? "https://spotify-helper-faisaldz.vercel.app/",
   };
-  return `globalThis.LISTEN_ALONG_CONFIG = ${JSON.stringify(config)};\n` + fs.readFileSync("spicetify/listen-along.js", "utf8");
+  return `${await qrIife()}\nglobalThis.LISTEN_ALONG_CONFIG = ${JSON.stringify(config)};\n` + fs.readFileSync("spicetify/listen-along.js", "utf8");
 }
 const SKIP = new Set(["config.js", "config.example.js", "check-search.mjs"]);
 
@@ -42,14 +54,14 @@ export default ({ mode }) => {
             res.setHeader("Content-Type", "application/zip");
             res.end(extensionZip(env));
           });
-          server.middlewares.use(`/${SPICETIFY}`, (_req, res) => {
+          server.middlewares.use(`/${SPICETIFY}`, async (_req, res) => {
             res.setHeader("Content-Type", "text/javascript");
-            res.end(spicetifyFile(env));
+            res.end(await spicetifyFile(env));
           });
         },
-        generateBundle() {
+        async generateBundle() {
           this.emitFile({ type: "asset", fileName: ZIP, source: extensionZip(env) });
-          this.emitFile({ type: "asset", fileName: SPICETIFY, source: spicetifyFile(env) });
+          this.emitFile({ type: "asset", fileName: SPICETIFY, source: await spicetifyFile(env) });
         },
       },
     ],
