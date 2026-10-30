@@ -13,7 +13,10 @@ chrome.storage.local.get(["room", "tabId", "name"]).then((s) => {
   nameSetting = s.name ?? "";
 });
 chrome.storage.onChanged.addListener((c) => {
-  if (c.room) room = c.room.newValue ?? null;
+  if (c.room) {
+    room = c.room.newValue ?? null;
+    if (!room) { stream?.close(); streamKey = ""; streamUp = false; } // left the room
+  }
   if (c.tabId) followerTab = c.tabId.newValue ?? null;
   if (c.name) nameSetting = c.name.newValue ?? "";
 });
@@ -59,7 +62,7 @@ async function run() {
     busy = false;
   }
 }
-setInterval(run, 1500);
+setInterval(run, 750); // drift checks; room data itself streams in
 let endTimer;
 
 let lastBeat = 0;
@@ -73,6 +76,42 @@ function leaveKicked() {
   report("Anda dikeluarkan dari room oleh host.");
   document.querySelector("#movie_player video, video")?.pause();
   chrome.storage.local.remove(["room", "tabId"]);
+}
+
+// Firebase REST streaming (Server-Sent Events) for the room's track: host changes arrive in ~100-300 ms
+// instead of on the next poll. If the stream can't open (or drops), tick() polls as before.
+let stream = null;
+let streamKey = "";
+let streamed = null;
+let streamUp = false;
+function ensureStream(auth) {
+  const key = `${room}|${auth.idToken}`;
+  if (key === streamKey) return;
+  stream?.close();
+  streamKey = key;
+  streamUp = false;
+  streamed = null;
+  try {
+    const es = new EventSource(`${DB_URL}/rooms/${room}/track.json?auth=${auth.idToken}`);
+    stream = es;
+    const apply = (path, data, merge) => {
+      if (path === "/") streamed = merge ? { ...(streamed ?? {}), ...data } : data;
+      else {
+        streamed = { ...(streamed ?? {}) };
+        const k = path.split("/").filter(Boolean)[0];
+        streamed[k] = merge ? { ...(streamed[k] ?? {}), ...data } : data;
+      }
+      streamUp = true;
+      run(); // react right away
+    };
+    es.addEventListener("put", (e) => { const { path, data } = JSON.parse(e.data); apply(path, data, false); });
+    es.addEventListener("patch", (e) => { const { path, data } = JSON.parse(e.data); apply(path, data, true); });
+    es.addEventListener("auth_revoked", () => { streamKey = ""; }); // next tick reopens with a fresh token
+    es.addEventListener("cancel", () => { stream?.close(); streamKey = ""; leaveKicked(); });
+    es.onerror = () => { streamUp = false; };
+  } catch {
+    streamUp = false;
+  }
 }
 
 async function tick() {
@@ -92,9 +131,14 @@ async function tick() {
     const echoed = await beat.json().catch(() => null);
     if (typeof echoed?.at === "number") serverOffset = echoed.at - (sent + Date.now()) / 2; // assume symmetric latency
   }
-  const res = await fetch(`${DB_URL}/rooms/${room}/track.json?auth=${auth.idToken}`);
-  if (res.status === 401 || res.status === 403) return leaveKicked();
-  let t = await res.json();
+  ensureStream(auth);
+  let t;
+  if (streamUp) t = streamed && structuredClone(streamed);
+  else {
+    const res = await fetch(`${DB_URL}/rooms/${room}/track.json?auth=${auth.idToken}`);
+    if (res.status === 401 || res.status === 403) return leaveKicked();
+    t = await res.json();
+  }
   if (!t?.id) return report(`Room ${room}: host belum memutar lagu`);
   if (t.next && t.isPlaying) {
     // Switch to the host's queued next song the moment this one should end; the host's own update
@@ -103,9 +147,9 @@ async function tick() {
     if (serverNow() >= endAt) t = { ...t.next, progressMs: 0, isPlaying: true, at: endAt };
     else {
       if (SITE === "youtube") prefetchVideo(t.next);
-      // Ends before the next 1.5 s tick: wake up exactly at the end instead.
+      // Ends before the next tick: wake up exactly at the end instead.
       clearTimeout(endTimer);
-      if (endAt - serverNow() < 1500) endTimer = setTimeout(run, endAt - serverNow() + 50);
+      if (endAt - serverNow() < 1000) endTimer = setTimeout(run, endAt - serverNow() + 50);
     }
   }
   const target = (t.progressMs + (t.isPlaying ? serverNow() - t.at : 0)) / 1000;
@@ -113,6 +157,28 @@ async function tick() {
 }
 
 // ---------- YouTube / YouTube Music: drive the page's <video> element ----------
+
+// Same filtered correction as spicetify-jam: ignore < 250 ms, fix creeping drift after 2 confirmations,
+// fix anything > 800 ms at once; give each seek 1.5 s to settle (YouTube buffers after a jump).
+let driftEma = null;
+let driftHits = 0;
+let lastCorrection = 0;
+function correctDrift(v, target) {
+  // Only judge a video that can actually play: after a seek YouTube rebuffers, and re-seeking before it
+  // is ready (readyState < 3) starts the buffering over again, so it never catches up.
+  if (Date.now() - lastCorrection < 1500 || v.seeking || v.readyState < 3) return;
+  const d = v.currentTime - target;
+  driftEma = driftEma == null ? d : 0.6 * driftEma + 0.4 * d;
+  const big = Math.abs(d) > 0.8;
+  const small = Math.abs(driftEma) > 0.25 && ++driftHits >= 2;
+  if (Math.abs(driftEma) <= 0.25) driftHits = 0;
+  if (big || small) {
+    v.currentTime = target;
+    lastCorrection = Date.now();
+    driftEma = null;
+    driftHits = 0;
+  }
+}
 
 // Look the next song up ahead of time (background caches it), so switching needs no search.
 const prefetched = new Set();
@@ -149,7 +215,7 @@ async function syncYouTube(t, target) {
     return report(`⏸ ${t.title} — ${t.artist}`, { host: target, me: v.currentTime, dur: t.durationSec });
   }
   if (v.paused) v.play().catch(() => report("Klik video sekali supaya browser mengizinkan pemutaran"));
-  if (Math.abs(v.currentTime - target) > 2) v.currentTime = target;
+  correctDrift(v, target);
   report(`▶ ${t.title} — ${t.artist}`, { host: target, me: v.currentTime, dur: t.durationSec });
 }
 

@@ -61,12 +61,14 @@
 
   // Room timestamps are server time; estimate this machine's offset from writes that echo a server timestamp.
   let serverOffset = 0;
+  let offsetKnown = false;
+  let publishes = 0;
   const serverNow = () => Date.now() + serverOffset;
   async function writeTimed(path, value) {
     const sent = Date.now();
     const r = await db(path, "PUT", value);
-    const at = r.data?.at ?? r.data?.track?.at;
-    if (typeof at === "number") serverOffset = at - (sent + Date.now()) / 2;
+    const at = typeof value?.at === "object" || typeof value?.track?.at === "object" ? (r.data?.at ?? r.data?.track?.at) : undefined; // only server-resolved stamps
+    if (typeof at === "number") { serverOffset = at - (sent + Date.now()) / 2; offsetKnown = true; }
     return r;
   }
 
@@ -170,7 +172,10 @@
       hostUid: uid,
       host,
       settings,
-      track: t && { ...t, at: TS, next: (q[0] && slimItem(q[0])) ?? upcoming[0] ?? null, upcoming },
+      // The server timestamp is when the write lands (~RTT/2 after the position was read); once the clock
+      // offset is known, stamp the read moment itself.
+      // Every 20th write still uses the server stamp, so the offset keeps being re-measured (~once a minute).
+      track: t && { ...t, at: offsetKnown && ++publishes % 20 ? serverNow() : TS, next: (q[0] && slimItem(q[0])) ?? upcoming[0] ?? null, upcoming },
     });
     if (r.status !== 200) say(`Gagal mengirim ke room (HTTP ${r.status}).`);
   }
@@ -282,6 +287,7 @@
   // The room queue plays before Spotify's own "up next": start it right as the current song ends.
   let advancedFrom = null;
   let polledId = null;
+  let lastSeen = null; // host: last position sample, for seek detection
   function advanceCheck() {
     if (!isHost()) return;
     const t = nowPlaying();
@@ -297,6 +303,14 @@
       publish(); // instant song changes
       render(); // now playing card / mini player
     }
+    // A jump the clock can't explain = the host seeked: tell listeners now instead of on the 3 s heartbeat.
+    const now = Date.now();
+    if (lastSeen && lastSeen.id === t.id) {
+      // Play/pause flipped (the onplaypause event usually covers this; this is the backstop).
+      if (t.isPlaying !== lastSeen.playing) publishNow();
+      else if (t.isPlaying && Math.abs(t.progressMs - (lastSeen.pos + (now - lastSeen.at))) > 1200) publishNow();
+    }
+    lastSeen = { id: t.id, pos: t.progressMs, at: now, playing: t.isPlaying };
     const next = sortedQueue().find((it) => it.id !== t.id);
     const left = t.durationSec * 1000 - t.progressMs;
     if (next && t.isPlaying && left < 700 && advancedFrom !== t.id) {
@@ -311,6 +325,64 @@
   let lastLoad = 0;
   let endTimer;
 
+  // Firebase REST streaming: the host's writes arrive within ~100-300 ms instead of on the next 1 s poll.
+  // Falls back to polling while the stream is down.
+  let stream = null;
+  let streamed = null; // latest room object from the stream
+  let streamUp = false;
+  async function openStream() {
+    closeStream();
+    const c = code;
+    const a = await getAuth();
+    if (mode !== "listen" || code !== c) return;
+    const es = new EventSource(`${CFG.dbUrl}/rooms/${c}.json?auth=${a.idToken}`);
+    stream = es;
+    const apply = (path, data, merge) => {
+      if (path === "/") streamed = merge ? { ...(streamed ?? {}), ...data } : data;
+      else {
+        const keys = path.split("/").filter(Boolean);
+        streamed = structuredClone(streamed ?? {});
+        let o = streamed;
+        for (const k of keys.slice(0, -1)) o = o[k] = o[k] ?? {};
+        o[keys.at(-1)] = merge ? { ...(o[keys.at(-1)] ?? {}), ...data } : data;
+      }
+      streamUp = true;
+      followLoop(); // react right away
+    };
+    es.addEventListener("put", (e) => { const { path, data } = JSON.parse(e.data); apply(path, data, false); });
+    es.addEventListener("patch", (e) => { const { path, data } = JSON.parse(e.data); apply(path, data, true); });
+    es.addEventListener("auth_revoked", () => openStream()); // ID token expired (hourly): reconnect with a fresh one
+    es.addEventListener("cancel", () => { closeStream(); kicked(); }); // rules now deny the read
+    es.onerror = () => { streamUp = false; }; // EventSource retries by itself; poll meanwhile
+  }
+  function closeStream() {
+    stream?.close();
+    stream = null;
+    streamUp = false;
+    streamed = null;
+  }
+
+  // Drift correction state (listener).
+  let driftEma = null;
+  let driftHits = 0;
+  let lastCorrection = 0;
+  function correctDrift(target) {
+    if (Date.now() - lastCorrection < 1500) return 0; // let a seek settle before judging again
+    const d = Player.getProgress() - target;
+    driftEma = driftEma == null ? d : 0.6 * driftEma + 0.4 * d; // smooths out one-off jitter
+    const big = Math.abs(d) > 800; // clearly off (host seeked, ad, stall): fix now
+    const small = Math.abs(driftEma) > 250 && ++driftHits >= 2; // creeping drift: fix after 2 confirmations
+    if (Math.abs(driftEma) <= 250) driftHits = 0;
+    if (big || small) {
+      // seek() treats values in 0..1 as a fraction of the track, so never pass less than 2 ms.
+      Player.seek(Math.max(2, Math.round(target)));
+      lastCorrection = Date.now();
+      driftEma = null;
+      driftHits = 0;
+    }
+    return d;
+  }
+
   async function startListen(c) {
     // Sign in before switching modes: the 1 s follow loop would otherwise send a heartbeat for uid null,
     // get a 401 and treat it as a kick.
@@ -320,6 +392,7 @@
     store.set("la:mode", "listen");
     store.set("la:room", c);
     lastBeat = 0;
+    openStream().catch(() => {});
     say(`Bergabung ke room ${c}…`);
     openPanel(true);
     render();
@@ -334,10 +407,14 @@
       const beat = await writeTimed(`listeners/${code}/${uid}`, { name: await myName(), via: "spicetify", avatar: p.avatar ?? null, at: TS });
       if (beat.status === 401) return kicked();
     }
-    const r = await db(`rooms/${code}`);
-    if (r.status === 401) return kicked();
+    let data = streamed;
+    if (!streamUp) {
+      const r = await db(`rooms/${code}`);
+      if (r.status === 401) return kicked();
+      data = r.data;
+    }
     const before = `${room.track?.id}|${room.track?.isPlaying}|${room.settings?.guestControl}`;
-    room = { hostUid: r.data?.hostUid ?? null, host: r.data?.host ?? null, settings: r.data?.settings ?? {}, track: r.data?.track ?? null };
+    room = { hostUid: data?.hostUid ?? null, host: data?.host ?? null, settings: data?.settings ?? {}, track: data?.track ?? null };
     if (before !== `${room.track?.id}|${room.track?.isPlaying}|${room.settings?.guestControl}`) render();
     let t = room.track;
     if (!t?.id) return say(room.hostUid ? `Room ${code}: host belum memutar lagu` : `Room ${code} tidak ada atau sudah diakhiri`);
@@ -356,6 +433,7 @@
     if (Player.data?.item?.uri !== `spotify:track:${t.id}`) {
       if (Date.now() - lastLoad < 4000) return; // give playUri time to land
       lastLoad = Date.now();
+      lastCorrection = Date.now(); // the new track needs a moment before its position means anything
       say(`Memutar ${t.title} — ${t.artist}…`);
       await Player.playUri(`spotify:track:${t.id}`);
       return;
@@ -365,10 +443,8 @@
       return say(`⏸ ${t.title} — ${t.artist}`);
     }
     if (!Player.isPlaying()) Player.play();
-    const drift = Player.getProgress() - target;
-    // seek() treats values in 0..1 as a fraction of the track, so never pass less than 2 ms.
-    if (Math.abs(drift) > 2000) Player.seek(Math.max(2, Math.round(target)));
-    say(`Sinkron dengan host (selisih ${(drift / 1000).toFixed(1)} dtk)`);
+    const drift = correctDrift(target);
+    say(`Sinkron dengan host (selisih ${(drift / 1000).toFixed(2)} dtk${streamUp ? "" : ", polling"})`);
   }
 
   function kicked() {
@@ -379,6 +455,7 @@
   }
 
   function stop() {
+    closeStream();
     mode = null;
     code = null;
     room = { hostUid: null, host: null, settings: {}, track: null };
@@ -495,6 +572,8 @@
     .la-np-t { flex: 1; min-width: 0; display: grid; gap: 3px; }
     .la-np-t b { font-size: 15px; }
     .la-bar { height: 4px; background: #ffffff26; border-radius: 2px; margin-top: 8px; overflow: hidden; }
+    .la-bar.la-seek { cursor: pointer; height: 6px; }
+    .la-bar.la-seek:hover > i { background: var(--la-accent); }
     .la-bar > i { display: block; height: 100%; background: var(--la-text); width: 0; transition: width 1s linear; }
     .la-times { display: flex; justify-content: space-between; font-size: 11px; color: var(--la-sub); margin-top: 4px; font-variant-numeric: tabular-nums; }
     .la-ctrls { display: flex; justify-content: center; align-items: center; gap: 18px; margin-top: 12px; }
@@ -759,7 +838,15 @@
         h("div", { className: "la-np-t" },
           h("b", { className: "la-ell", textContent: t.title }),
           h("span", { className: "la-sub la-ell", textContent: t.artist }),
-          h("div", { className: "la-bar" }, h("i")),
+          (() => {
+            const bar = h("div", { className: `la-bar${controls ? " la-seek" : ""}`, title: controls ? "Klik untuk pindah posisi" : "" }, h("i"));
+            if (controls) bar.onclick = (e) => {
+              const r = bar.getBoundingClientRect();
+              const pos = Math.round(Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) * t.durationSec * 1000);
+              control("seek", { pos }).catch((err) => say(`Error: ${err.message}`));
+            };
+            return bar;
+          })(),
           h("div", { className: "la-times" }),
         ),
       ) : h("div", { className: "la-empty", textContent: isHost() ? "Putar lagu di Spotify untuk memulai." : "Host belum memutar lagu." }),

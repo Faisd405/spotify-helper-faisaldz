@@ -6,6 +6,7 @@ let onStatus = () => {};
 let state = null; // last playback_update: { playingURI, isPaused, isBuffering, duration, position } + at
 let joined = false;
 let loadedTrack = null; // spotify track id we asked the embed to load
+let lastSeek = 0;
 
 export function createPlayer(element, statusCallback) {
   onStatus = statusCallback;
@@ -53,6 +54,9 @@ export function sync(t) {
 
   if (!t.isPlaying) return state.isPaused || ctrl.pause();
   if (state.isPaused) return ctrl.resume();
-  // seek() takes whole seconds; skip while buffering so we don't seek in a loop.
-  if (!state.isBuffering && Math.abs(embedSec() - targetSec(t)) > 2) ctrl.seek(Math.round(targetSec(t)));
+  // seek() only takes whole seconds (±0.5 s), so correct beyond 1.2 s, and give each seek 2 s to settle.
+  if (!state.isBuffering && Date.now() - lastSeek > 2000 && Math.abs(embedSec() - targetSec(t)) > 1.2) {
+    lastSeek = Date.now();
+    ctrl.seek(Math.round(targetSec(t)));
+  }
 }

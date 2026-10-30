@@ -49,7 +49,7 @@ function art(url, cls = "art") {
 }
 
 // Now playing: art, title/artist, progress (filled in by the clock tick), optional playback controls.
-export function renderNowPlaying(el, track, { controls, onControl, onError, next }) {
+export function renderNowPlaying(el, track, { controls, onControl, onError, next, onSeek }) {
   if (!track) return el.replaceChildren(h("p", { className: "muted", textContent: "Belum ada lagu yang diputar." }));
   const ctrl = (label, a, title) => button(label, () => onControl(a), { cls: "ctrl", title, onError });
   el.replaceChildren(
@@ -60,7 +60,7 @@ export function renderNowPlaying(el, track, { controls, onControl, onError, next
         h("span", { className: "muted", textContent: track.artist }),
         // spotify: links open the desktop app (or the phone app) on this exact track.
         h("a", { className: "open-spotify", href: `spotify:track:${track.id}`, textContent: "Buka di Spotify ↗", title: "Buka lagu ini di app Spotify" }),
-        h("div", { className: "np-progress" }, h("span", { id: "np-elapsed", textContent: "0:00" }), h("progress", { id: "np-bar", max: 1, value: 0 }), h("span", { textContent: mmss(track.durationSec) })),
+        h("div", { className: "np-progress" }, h("span", { id: "np-elapsed", textContent: "0:00" }), seekBar(track, onSeek, onError), h("span", { textContent: mmss(track.durationSec) })),
       ),
     ),
     controls ? h("div", { className: "np-controls" },
@@ -74,6 +74,19 @@ export function renderNowPlaying(el, track, { controls, onControl, onError, next
       h("span", { className: "grow", textContent: `${next.title} — ${next.artist}` }),
     ) : "",
   );
+}
+
+// The progress bar; clickable (seek) for the host and for guests with control.
+function seekBar(track, onSeek, onError) {
+  const bar = h("progress", { id: "np-bar", max: 1, value: 0, className: onSeek ? "seekable" : "", title: onSeek ? "Klik untuk pindah posisi" : "" });
+  if (onSeek) {
+    bar.onclick = (e) => {
+      const r = bar.getBoundingClientRect();
+      const pos = Math.round(Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) * track.durationSec * 1000);
+      Promise.resolve(onSeek(pos)).catch(onError);
+    };
+  }
+  return bar;
 }
 
 const VIA = { web: "Web", youtube: "YouTube", spotify: "Spotify Web", spicetify: "Spotify" };

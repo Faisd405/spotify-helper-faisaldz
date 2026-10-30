@@ -146,7 +146,7 @@ function renderRoom() {
   const key = `${track?.id}|${track?.isPlaying}|${controls}|${next?.id}`;
   if (key !== npKey) {
     npKey = key;
-    renderNowPlaying($("#np"), track, { controls, onControl: control, onError, next });
+    renderNowPlaying($("#np"), track, { controls, onControl: control, onError, next, onSeek: controls ? (pos) => control("seek", { pos }) : null });
   }
   const list = liveMembers();
   $("#member-count").textContent = `(${list.length})`;
@@ -292,8 +292,10 @@ async function host() {
   poll();
   // Chrome throttles a hidden tab's own timers to about once a minute, but not a worker's, so the
   // 3 s heartbeat lives in a tiny worker. (Phones freeze background tabs entirely; nothing to do there.)
-  const ticker = new Worker(URL.createObjectURL(new Blob(["setInterval(() => postMessage(0), 3000)"], { type: "text/javascript" })));
-  ticker.onmessage = poll;
+  const ticker = new Worker(URL.createObjectURL(new Blob(["setInterval(() => postMessage(0), 1000)"], { type: "text/javascript" })));
+  // With a room open, poll every second so pauses/seeks reach listeners sooner; otherwise every 3 s.
+  let ticks = 0;
+  ticker.onmessage = () => (room || ++ticks % 3 === 0) && poll();
   document.addEventListener("visibilitychange", poll); // resync right away when reopened
 }
 

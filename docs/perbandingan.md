@@ -62,22 +62,33 @@ Diperbarui 30 Oktober 2026. [spicetify-jam](https://github.com/Kyzenkms/spicetif
 | **Jalan di jaringan ketat** | Firebase (server pusat), bukan P2P yang bisa gagal di NAT kampus, kantor, atau seluler |
 | **Tanpa telemetri** | spicetify-jam asli mengirim telemetri tersembunyi ke server pribadi pembuatnya |
 
+### Sinkron setelah Phase 5 (30 Oktober 2026)
+
+| | spicetify-jam | Listen Along |
+|---|---|---|
+| Host mendeteksi seek/pause | Cek setiap 400 ms | Spicetify: cek setiap 400 ms + event play/pause, langsung kirim. Web host: polling 1 detik selama room aktif |
+| Sampai ke pendengar | P2P langsung | Streaming Firebase (Server-Sent Events) untuk Spicetify dan extension; push Firebase untuk web |
+| Koreksi selisih | < 160 ms diabaikan, 160–650 ms setelah 2 konfirmasi, > 650 ms langsung | Spicetify & YouTube: < 250 ms diabaikan, 250–800 ms setelah 2 konfirmasi, > 800 ms langsung. Spotify Embed: > 1,2 detik (seek-nya per detik penuh) |
+| Klik progress bar untuk seek | ✅ | ✅ Web dan Spicetify (host, atau tamu kalau diizinkan) |
+
+**Hasil ukur** (dua player Spicetify tiruan dengan jam sungguhan, lewat Firebase asli):
+selisih stabil rata-rata **29–44 ms**; host seek diikuti dalam **316–374 ms**; pause dalam **462 ms**; play dalam
+**62 ms**. Extension YouTube (Chrome, lewat streaming): seek diikuti dalam **373 ms**, pause dalam **4 ms**. Selisih stabil
+di YouTube belum bisa diukur: Chrome headless dengan extension aktif tidak memutar video YouTube sama sekali.
+
 ### Yang masih lebih baik di spicetify-jam
 
-| Fitur | spicetify-jam | Listen Along sekarang |
+| | spicetify-jam | Listen Along |
 |---|---|---|
-| **Ketepatan sinkron** | Host mengecek setiap 400 ms, seek terkirim seketika, tamu dikoreksi kalau selisih lebih dari 160 ms (dengan filter) | Host Spicetify mengirim saat ganti lagu/play/pause **dan setiap 3 detik**; seek baru terkirim hingga 3 detik kemudian; toleransi selisih **2 detik** |
-| **Kecepatan sampai ke tamu** | P2P langsung (puluhan ms) | Web: push Firebase (sekitar 100–300 ms). Spicetify dan extension: polling setiap 1–1,5 detik |
-| **Seek dengan klik progress bar** | ✅ Host, atau tamu kalau diizinkan | ❌ Belum ada (perintah `seek` sudah didukung, tapi belum ada tombol/bar untuk memakainya) |
-| **Tanpa server** | Tidak butuh database | Butuh Firebase (paket gratis cukup) |
+| Tanpa server | Tidak butuh database | Butuh Firebase (paket gratis cukup) |
 | Durasi di queue dari pencarian | Ada | Lagu yang ditambah lewat pencarian di Spicetify belum punya durasi |
+| Pendengar HP (Spotify Embed) | Tidak didukung | ±1–2 detik, karena embed hanya bisa seek per detik penuh |
 
 ### Kesimpulan
 
-Untuk **fitur dan tampilan**, Listen Along sekarang setara dan lebih luas (HP, web, YouTube, lirik romaji). Yang masih
-tertinggal adalah **ketepatan sinkron**. Perbaikannya sudah direncanakan sebagai Phase 5: cek posisi host setiap
-400 ms dan kirim seek seketika, streaming Firebase untuk pendengar, toleransi sekitar 300 ms dengan filter, dan
-progress bar yang bisa diklik.
+Setelah Phase 5, ketepatan sinkron Listen Along untuk pendengar Spicetify setara dengan spicetify-jam (puluhan ms),
+dan fitur serta jangkauannya lebih luas (HP, web, YouTube, lirik romaji). Yang tersisa: butuh Firebase, dan pendengar
+HP lewat Spotify Embed tetap sekitar 1–2 detik.
 
 ## Instalasi di laptop ini
 
