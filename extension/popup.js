@@ -92,6 +92,75 @@ $("#req-form").onsubmit = async (e) => {
 loadRequests();
 setInterval(loadRequests, 3000);
 
+// ---------- Room view (Jam-style): now playing, members, shared queue, guest controls ----------
+
+const el = (tag, props = {}, ...kids) => {
+  const e = Object.assign(document.createElement(tag), props);
+  e.append(...kids.filter((k) => k != null));
+  return e;
+};
+const COLORS = ["#e91e63", "#9c27b0", "#3f51b5", "#03a9f4", "#009688", "#8bc34a", "#ff9800", "#ff5722"];
+function av(name = "?", url = null) {
+  if (url) {
+    const img = el("img", { className: "av", src: url, alt: "", title: name });
+    img.onerror = () => img.replaceWith(av(name, null));
+    return img;
+  }
+  const hash = [...name].reduce((a, c) => (a * 31 + c.charCodeAt(0)) >>> 0, 7);
+  return el("span", { className: "av", title: name, textContent: name.trim().slice(0, 1).toUpperCase(), style: `background:${COLORS[hash % COLORS.length]}` });
+}
+const cover = (url) => (url ? el("img", { src: url, alt: "" }) : el("span", { className: "ph" }));
+
+let roomCache = null;
+async function loadRoom() {
+  const { room } = await chrome.storage.local.get("room");
+  $("#room-view").hidden = !room;
+  if (!room) return;
+  const a = await auth();
+  if (!a?.idToken) return;
+  const get = (p) => fetch(`${DB_URL}/${p}.json?auth=${a.idToken}`).then((r) => (r.ok ? r.json() : null));
+  const [info, listeners, queue] = await Promise.all([get(`rooms/${room}`), get(`listeners/${room}`), get(`queues/${room}`)]);
+  if (!info) return;
+  roomCache = { room, info, uid: a.uid, token: a.idToken };
+  const t = info.track;
+  $("#np").replaceChildren(...(t
+    ? [cover(t.art), el("div", { className: "np-t" }, el("b", { textContent: t.title }), el("span", { textContent: t.artist, style: "opacity:.65;font-size:12px" }))]
+    : [el("span", { textContent: "Host belum memutar lagu.", style: "opacity:.65" })]));
+  $("#ctrls").hidden = !(t && info.settings?.guestControl);
+
+  const now = Date.now();
+  const people = [{ name: info.host?.name ?? "Host", avatar: info.host?.avatar }]
+    .concat(Object.entries(listeners ?? {}).filter(([u, l]) => u !== info.hostUid && now - l.at < 60_000).map(([, l]) => l));
+  $("#members").replaceChildren(el("span", { className: "stack" }, ...people.slice(0, 6).map((m) => av(m.name, m.avatar))), el("span", { textContent: `${people.length} di room`, style: "margin-left:8px" }));
+
+  const items = Object.entries(queue ?? {}).map(([key, v]) => ({ key, ...v })).sort((x, y) => x.order - y.order || x.at - y.at);
+  $("#queue").replaceChildren(...(items.length
+    ? items.map((it) => el("li", {}, cover(it.art), el("div", { className: "q-t" }, el("b", { textContent: it.title }), el("span", { textContent: it.artist })), av(it.name, it.avatar),
+        it.by === a.uid || info.settings?.guestControl ? Object.assign(el("button", { type: "button", textContent: "✕", title: "Hapus" }), {
+          onclick: async () => { await fetch(`${DB_URL}/queues/${room}/${it.key}.json?auth=${a.idToken}`, { method: "DELETE" }); loadRoom(); },
+        }) : null))
+    : [el("li", { textContent: "Antrian room kosong.", style: "opacity:.6" })]));
+}
+
+// Guest controls: commands the host's app carries out (only while the host allows it; rules enforce that too).
+for (const b of document.querySelectorAll("#ctrls button")) {
+  b.onclick = async () => {
+    if (!roomCache) return;
+    const a = b.dataset.a === "toggle" ? (roomCache.info.track?.isPlaying ? "pause" : "play") : b.dataset.a;
+    b.disabled = true;
+    const res = await fetch(`${DB_URL}/commands/${roomCache.room}.json?auth=${roomCache.token}`, {
+      method: "POST",
+      body: JSON.stringify({ by: roomCache.uid, a, at: { ".sv": "timestamp" } }),
+    });
+    b.disabled = false;
+    if (!res.ok) $("#status").textContent = `Perintah ditolak (HTTP ${res.status}).`;
+    setTimeout(loadRoom, 800);
+  };
+}
+
+loadRoom();
+setInterval(loadRoom, 2000);
+
 chrome.storage.local.get("name").then(({ name }) => ($("#name").value = name ?? ""));
 $("#name").oninput = () => chrome.storage.local.set({ name: $("#name").value.trim() });
 

@@ -40,9 +40,15 @@ Usage: tap **Buat Room** → **Bagikan link**. Friends open the link and tap **G
 
 - **Background:** ⚙ → "Host: tetap kirim update saat tab di background" (on by default) keeps a desktop host
   publishing while its tab is hidden. Phones freeze background tabs, so keep the app open there.
-- **Requests:** listeners request a song by title or Spotify link. The host's app looks it up, the host taps
-  **+ Queue** to add it to their Spotify queue, and the request disappears once the song plays. Hosts who
-  logged in before this feature must log out and in once (new `user-modify-playback-state` permission).
+- **Room panel (Jam-style):** desktop sidebar / phone bottom sheet with a mini player: room code, QR invite,
+  now playing with album art, member avatars, and the shared queue.
+- **Shared queue:** anyone in the room adds songs (title or Spotify link). The host's songs go straight in;
+  listener songs are looked up by the host's app and go in automatically, or after **Setujui** when
+  "Lagu dari tamu perlu disetujui" is on. Play now, remove, reorder (drag or ↑). The room queue plays before
+  Spotify's own "up next". Hosts who logged in before this feature must log out and in once
+  (`user-modify-playback-state` permission).
+- **Guest controls:** with "Tamu boleh mengontrol pemutaran" on, guests get play/pause/next/previous, play now,
+  remove and reorder; their commands are carried out by the host's app.
 - **Listeners:** the room panel lists everyone connected (name + web/YouTube/Spotify) and lets the host
   **Kick** someone. Kicks are enforced by the database rules (no more room reads, heartbeats or requests).
   After changing `database.rules.json`, paste it into the Firebase Rules tab again.

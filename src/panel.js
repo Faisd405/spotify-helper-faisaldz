@@ -98,7 +98,7 @@ export function renderQueue(el, items, { perms, onPlay, onRemove, onMove, onErro
       const li = h("li", { className: "q-item", draggable: p.move },
         h("span", { className: "q-num muted", textContent: i + 1 }),
         art(it.art),
-        h("div", { className: "q-text" }, h("b", { textContent: it.title }), h("span", { className: "muted", textContent: `${it.artist} · ${mmss(it.durationSec ?? 0)}` })),
+        h("div", { className: "q-text" }, h("b", { textContent: it.title }), h("span", { className: "muted", textContent: it.durationSec ? `${it.artist} · ${mmss(it.durationSec)}` : it.artist })),
         avatar(it.name, it.avatar, "xs added-by"),
         p.move && i > 0 ? button("↑", () => onMove(it.key, i - 1), { cls: "icon", title: "Naikkan", onError }) : null,
         p.play ? button("▶", () => onPlay(it.key), { cls: "icon", title: "Putar sekarang", onError }) : null,
