@@ -30,13 +30,23 @@ export function button(label, action, { cls = "", busy = "…", title = "", onEr
 // Profile picture, or coloured initials when there is none (web listeners).
 const COLORS = ["#e91e63", "#9c27b0", "#3f51b5", "#03a9f4", "#009688", "#8bc34a", "#ff9800", "#ff5722"];
 export function avatar(name = "?", url = null, cls = "") {
-  if (url) return h("img", { className: `avatar ${cls}`, src: url, alt: "", title: name, referrerPolicy: "no-referrer" });
+  if (url) {
+    // A dead profile picture falls back to initials instead of a broken-image icon.
+    const img = h("img", { className: `avatar ${cls}`, src: url, alt: "", title: name, referrerPolicy: "no-referrer" });
+    img.onerror = () => img.replaceWith(avatar(name, null, cls));
+    return img;
+  }
   const hash = [...name].reduce((a, c) => (a * 31 + c.charCodeAt(0)) >>> 0, 7);
   const initials = name.trim().split(/\s+/).map((w) => w[0]).join("").slice(0, 2).toUpperCase() || "?";
   return h("span", { className: `avatar ${cls}`, textContent: initials, title: name, style: `background:${COLORS[hash % COLORS.length]}` });
 }
 
-const art = (url, cls = "art") => (url ? h("img", { className: cls, src: url, alt: "", loading: "lazy" }) : h("span", { className: `${cls} art-empty`, textContent: "♪" }));
+function art(url, cls = "art") {
+  if (!url) return h("span", { className: `${cls} art-empty`, textContent: "♪" });
+  const img = h("img", { className: cls, src: url, alt: "", loading: "lazy" });
+  img.onerror = () => img.replaceWith(art(null, cls));
+  return img;
+}
 
 // Now playing: art, title/artist, progress (filled in by the clock tick), optional playback controls.
 export function renderNowPlaying(el, track, { controls, onControl, onError }) {
@@ -51,11 +61,11 @@ export function renderNowPlaying(el, track, { controls, onControl, onError }) {
         h("div", { className: "np-progress" }, h("span", { id: "np-elapsed", textContent: "0:00" }), h("progress", { id: "np-bar", max: 1, value: 0 }), h("span", { textContent: mmss(track.durationSec) })),
       ),
     ),
-    controls && h("div", { className: "np-controls" },
+    controls ? h("div", { className: "np-controls" },
       ctrl("⏮", "prev", "Sebelumnya"),
       ctrl(track.isPlaying ? "⏸" : "▶", track.isPlaying ? "pause" : "play", track.isPlaying ? "Jeda" : "Putar"),
       ctrl("⏭", "next", "Berikutnya"),
-    ),
+    ) : "", // replaceChildren would print false/null as text
   );
 }
 

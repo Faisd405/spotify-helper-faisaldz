@@ -207,9 +207,13 @@ async function control(a, extra = {}) {
   setTimeout(poll, 400); // show the result right away
 }
 
+let justPlayed = null; // track id playItem started (and removed), so poll() doesn't remove a second copy
+let polledId = null; // track id seen by the previous poll
+
 async function playItem(key) {
   const it = queueItems[key];
   if (!it) return;
+  justPlayed = it.id;
   await player.playTrack(it.id);
   await fb.removeQueueItem(code, key);
   setTimeout(poll, 400);
@@ -395,8 +399,17 @@ async function poll() {
       // Drop Spotify's stale answer that still lists the song now playing first.
       if (upcoming[0]?.id === t.id) upcoming = upcoming.slice(1);
       const q = sortedQueue();
-      // A queued song that is now playing (e.g. picked in Spotify itself) is done.
-      for (const it of q) if (it.id === t.id) fb.removeQueueItem(code, it.key).catch(() => {});
+      // A queued song the host started outside the room queue (e.g. in Spotify itself) is done. Only on a
+      // song change, only one copy (others may have requested the same song), and not the one playItem
+      // just played and removed itself.
+      if (t.id !== polledId) {
+        if (t.id !== justPlayed) {
+          const dup = q.find((it) => it.id === t.id);
+          if (dup) fb.removeQueueItem(code, dup.key).catch(() => {});
+        }
+        justPlayed = null;
+      }
+      polledId = t.id;
       const roomNext = q.find((it) => it.id !== t.id);
       // The room queue plays before Spotify's own "up next": start it right as this song ends.
       if (roomNext && left < 3500 && advancedFrom !== t.id) {
