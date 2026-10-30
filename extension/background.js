@@ -36,7 +36,15 @@ async function findVideo(track) {
 
 // Anonymous Firebase sign-in over REST (no SDK in the extension). The rules need a uid to read rooms,
 // send presence and be kickable. ID tokens last an hour; refresh with the stored refresh token.
-async function getAuth() {
+// Concurrent callers share one sign-in: two parallel sign-ups would create two anonymous users, and
+// presence (one uid) and reads (the other) would no longer match, so kicks would not stick.
+let signingIn = null;
+function getAuth() {
+  signingIn ??= signIn().finally(() => (signingIn = null));
+  return signingIn;
+}
+
+async function signIn() {
   const { auth } = await chrome.storage.local.get("auth");
   if (auth && Date.now() < auth.expiresAt - 60_000) return auth;
   let next;

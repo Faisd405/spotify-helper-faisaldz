@@ -9,11 +9,11 @@
     },
     "listeners": {
       "$code": {
-        ".read": "auth != null && root.child('rooms').child($code).child('hostUid').val() === auth.uid",
+        ".read": "auth != null && !root.child('kicked').child($code).child(auth.uid).exists()",
         ".write": "auth != null && root.child('rooms').child($code).child('hostUid').val() === auth.uid",
         "$uid": {
           ".write": "auth != null && auth.uid === $uid && !root.child('kicked').child($code).child($uid).exists()",
-          ".validate": "newData.hasChildren(['name', 'via', 'at']) && newData.child('name').isString() && newData.child('name').val().length <= 40 && newData.child('via').isString() && newData.child('via').val().length <= 20 && newData.child('at').isNumber()"
+          ".validate": "newData.hasChildren(['name', 'via', 'at']) && newData.child('name').isString() && newData.child('name').val().length <= 40 && newData.child('via').isString() && newData.child('via').val().length <= 20 && newData.child('at').isNumber() && (!newData.child('avatar').exists() || (newData.child('avatar').isString() && newData.child('avatar').val().beginsWith('https://') && newData.child('avatar').val().length < 400))"
         }
       }
     },
@@ -43,10 +43,34 @@
         "lines": {
           "$i": {
             ".validate": "$i.matches(/^[0-9]{1,3}$/) && newData.child('timeMs').isNumber() && newData.child('text').isString() && newData.child('text').val().length < 500 && newData.child('roman').isString() && newData.child('roman').val().length < 1000",
-            "$field": { ".validate": "$field === 'timeMs' || $field === 'text' || $field === 'roman'" }
+            "$field": {
+              ".validate": "$field === 'timeMs' || $field === 'text' || $field === 'roman'"
+            }
           }
         },
-        "$other": { ".validate": false }
+        "$other": {
+          ".validate": false
+        }
+      }
+    },
+    "queues": {
+      "$code": {
+        ".read": "auth != null && !root.child('kicked').child($code).child(auth.uid).exists()",
+        ".write": "auth != null && root.child('rooms').child($code).child('hostUid').val() === auth.uid",
+        "$item": {
+          ".write": "auth != null && !root.child('kicked').child($code).child(auth.uid).exists() && data.exists() && ((!newData.exists() && (data.child('by').val() === auth.uid || root.child('rooms').child($code).child('settings').child('guestControl').val() === true)) || (root.child('rooms').child($code).child('settings').child('guestControl').val() === true && newData.exists() && newData.child('id').val() === data.child('id').val() && newData.child('by').val() === data.child('by').val() && newData.child('at').val() === data.child('at').val()))",
+          ".validate": "newData.hasChildren(['id', 'title', 'artist', 'by', 'name', 'order', 'at']) && newData.child('id').isString() && newData.child('id').val().length <= 40 && newData.child('title').isString() && newData.child('title').val().length <= 300 && newData.child('artist').isString() && newData.child('artist').val().length <= 300 && newData.child('name').isString() && newData.child('name').val().length <= 40 && newData.child('order').isNumber() && (!newData.child('art').exists() || (newData.child('art').isString() && newData.child('art').val().beginsWith('https://') && newData.child('art').val().length < 400))"
+        }
+      }
+    },
+    "commands": {
+      "$code": {
+        ".read": "auth != null && root.child('rooms').child($code).child('hostUid').val() === auth.uid",
+        ".write": "auth != null && root.child('rooms').child($code).child('hostUid').val() === auth.uid",
+        "$cmd": {
+          ".write": "auth != null && !root.child('kicked').child($code).child(auth.uid).exists() && !data.exists() && root.child('rooms').child($code).child('settings').child('guestControl').val() === true && newData.child('by').val() === auth.uid",
+          ".validate": "newData.hasChildren(['by', 'a', 'at']) && newData.child('a').isString() && newData.child('a').val().matches(/^(play|pause|next|prev|seek|playItem)$/) && (!newData.child('pos').exists() || newData.child('pos').isNumber()) && (!newData.child('key').exists() || (newData.child('key').isString() && newData.child('key').val().length <= 40))"
+        }
       }
     }
   }

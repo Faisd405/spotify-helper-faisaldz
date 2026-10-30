@@ -1,18 +1,28 @@
-import { login, logout, handleRedirect, isLoggedIn, getNowPlaying, getQueue, isRateLimited, resolveTrack, addToQueue } from "./spotify.js";
+import { login, logout, handleRedirect, isLoggedIn, getNowPlaying, getQueue, getMe, player, isRateLimited, resolveTrack } from "./spotify.js";
 import { fetchLyrics } from "./lyrics.js";
 import { romanize, detectLang } from "./romanize.js";
+import { avatar, renderNowPlaying, renderMembers, renderQueue, renderPending, renderUpcoming, renderQR } from "./panel.js";
 
 const $ = (s) => document.querySelector(s);
-let track = null; // { id, title, artist, album, durationSec, progressMs, isPlaying, fetchedAt }
+let track = null; // what's on screen: { id, title, artist, album, art, durationSec, progressMs, isPlaying, fetchedAt }
 let lyrics = [];
 let lastId = null;
 let activeIdx = -1;
 let offsetMs = 300; // sync calibration, set from the settings form
-let fb = null; // firebase.js module, loaded only once a room is used
-let room = null; // host only: { code, publish, end }
 let keepAlive = true; // host keeps polling while its tab is hidden (settings toggle)
-let requests = {}; // requests/{code}: { id: { by, name, text, at, track?, status? } }
-let listenerData = {}; // host only: listeners/{code}
+let fb = null; // firebase.js module, loaded only once a room is used
+
+// Room state (host and listener alike); the panel renders from these.
+let room = null; // host only: { code, uid, publish, end, off: [] }
+let code = null; // room code, host or listener
+let myUid = null;
+let roomInfo = { hostUid: null, host: null, settings: {} }; // listener: from the room; host: its own
+let members = {}; // listeners/{code}
+let queueItems = {}; // queues/{code}
+let requests = {}; // requests/{code}
+let upcoming = []; // Spotify's own "up next" (host fetches it; listeners get it in the room)
+let hostProfile = { name: "Host", avatar: null };
+let settingsState = { guestControl: false, approval: false, ...JSON.parse(localStorage.getItem("room_settings") ?? "{}") };
 
 const settings = $("#settings form");
 const saved = JSON.parse(localStorage.getItem("style") ?? "{}");
@@ -38,14 +48,199 @@ settings.onreset = () => setTimeout(applyStyle); // reset fires before the input
 applyStyle();
 
 $("#ext-btn").onclick = () => {
-  const code = new URLSearchParams(location.search).get("room")?.toUpperCase() ?? room?.code;
   $("#ext-room").textContent = code ? ` (${code})` : "";
   $("#ext-dialog").showModal();
+};
+// Spicetify install: download the file into Spicetify's Extensions folder, enable it, re-apply.
+const spiceUrl = new URL("spicetify-listen-along.js", location.href).href;
+$("#spice-cmd").textContent =
+  `iwr "${spiceUrl}" -OutFile "$env:APPDATA\\spicetify\\Extensions\\spicetify-listen-along.js"; spicetify config extensions spicetify-listen-along.js; spicetify apply`;
+$("#spice-copy").onclick = async () => {
+  await navigator.clipboard.writeText($("#spice-cmd").textContent);
+  $("#spice-copy").textContent = "Tersalin";
 };
 $("#ext-copy").onclick = async () => {
   await navigator.clipboard.writeText("chrome://extensions");
   $("#ext-copy").textContent = "Tersalin";
 };
+
+// ---------- Panel shell: open/close, hero, session header ----------
+
+const panel = $("#room-panel");
+function setPanelOpen(open) {
+  panel.classList.toggle("open", open);
+  document.body.classList.toggle("panel-open", open);
+  $("#mini").setAttribute("aria-expanded", String(open));
+  localStorage.setItem("panel_open", open ? "1" : "0");
+}
+$("#mini").onclick = () => setPanelOpen(!panel.classList.contains("open"));
+// Desktop: open sidebar by default. Phone: start as the mini player so lyrics get the screen.
+setPanelOpen(localStorage.getItem("panel_open") ? localStorage.getItem("panel_open") === "1" : innerWidth >= 900);
+
+const roomLink = () => `${location.origin}${location.pathname}?room=${code}`;
+const parseCode = (v) => (v.match(/room=([A-Za-z0-9]{6})/)?.[1] ?? v.trim()).toUpperCase();
+$("#hero-join").onsubmit = (e) => {
+  e.preventDefault();
+  const c = parseCode($("#hero-code").value);
+  if (!/^[A-Z0-9]{6}$/.test(c)) return status("Kode room harus 6 huruf/angka.");
+  location.href = `${location.pathname}?room=${c}`;
+};
+$("#copy-link").onclick = async () => {
+  await navigator.clipboard.writeText(roomLink());
+  $("#copy-link").textContent = "Tersalin ✓";
+  setTimeout(() => ($("#copy-link").textContent = "Salin link"), 1500);
+};
+$("#invite-btn").onclick = () => {
+  $("#invite").hidden = !$("#invite").hidden;
+  $("#invite-link").textContent = roomLink();
+  if (!$("#invite").hidden) renderQR($("#qr"), roomLink());
+};
+$("#share-link").onclick = () =>
+  navigator.share ? navigator.share({ title: "Karaoke bareng", url: roomLink() }) : navigator.clipboard.writeText(roomLink());
+
+function showSession(isHost) {
+  $("#hero").hidden = true;
+  $("#session").hidden = false;
+  $("#room-code").textContent = code;
+  $("#end-room").hidden = false;
+  $("#end-room").textContent = isHost ? "Akhiri" : "Keluar";
+  $("#host-settings").hidden = !isHost;
+  $("#me-name").hidden = isHost;
+  $("#set-guest").checked = settingsState.guestControl;
+  $("#set-approval").checked = settingsState.approval;
+  renderRoom();
+}
+function showHero(message) {
+  $("#session").hidden = true;
+  $("#hero").hidden = false;
+  if (message) $("#hero p").textContent = message;
+  renderMini();
+}
+
+// ---------- Rendering the room ----------
+
+const sortedQueue = () =>
+  Object.entries(queueItems).map(([key, v]) => ({ key, ...v })).sort((a, b) => a.order - b.order || a.at - b.at);
+const isHost = () => !!room;
+const guestControl = () => !!roomInfo.settings?.guestControl;
+const onError = (e) => status(e.message);
+
+function liveMembers() {
+  const now = fb?.serverNow() ?? Date.now();
+  const host = { uid: roomInfo.hostUid, name: roomInfo.host?.name ?? "Host", avatar: roomInfo.host?.avatar ?? null, isHost: true };
+  const others = Object.entries(members)
+    .filter(([uid, l]) => uid !== roomInfo.hostUid && now - l.at < 45_000) // 3 missed heartbeats = gone
+    .map(([uid, l]) => ({ uid, ...l }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  return [host, ...others].map((m) => ({ ...m, isMe: m.uid === myUid }));
+}
+
+let npKey = "";
+function renderRoom() {
+  if (!code) return renderMini();
+  const controls = isHost() || guestControl();
+  // The card holds its own progress bar (updated by the clock tick); rebuild it only when it changes.
+  const key = `${track?.id}|${track?.isPlaying}|${controls}`;
+  if (key !== npKey) {
+    npKey = key;
+    renderNowPlaying($("#np"), track, { controls, onControl: control, onError });
+  }
+  const list = liveMembers();
+  $("#member-count").textContent = `(${list.length})`;
+  renderMembers($("#members"), list, { onKick: isHost() ? (uid) => fb.kick(code, uid) : null, onError });
+
+  renderQueue($("#queue"), sortedQueue(), {
+    perms: (it) => ({ play: controls, remove: isHost() || guestControl() || it.by === myUid, move: controls }),
+    onPlay: (key) => (isHost() ? playItem(key) : fb.sendCommand(code, "playItem", { key })),
+    onRemove: (key) => fb.removeQueueItem(code, key),
+    onMove: moveItem,
+    onError,
+  });
+  const reqs = Object.entries(requests).map(([key, r]) => ({ key, ...r })).sort((a, b) => a.at - b.at);
+  renderPending($("#pending"), reqs.map((r) => ({
+    key: r.key,
+    title: r.track ? `${r.track.title} — ${r.track.artist}` : r.text,
+    name: r.name,
+    state: r.status === "notfound" ? "tidak ketemu" : r.track ? "menunggu persetujuan" : "mencari…",
+    canApprove: isHost() && !!r.track,
+    canCancel: r.by === myUid || (isHost() && !r.track),
+  })), {
+    onApprove: (key) => approveRequest(key),
+    onReject: (key) => fb.removeRequest(code, key),
+    onCancel: (key) => fb.removeRequest(code, key),
+    onError,
+  });
+  renderUpcoming($("#upcoming"), upcoming);
+  renderMini();
+}
+
+function renderMini() {
+  const art = $("#mini-art");
+  if (track?.art) art.replaceWith(Object.assign(document.createElement("img"), { id: "mini-art", className: "art", src: track.art, alt: "" }));
+  else if (art.tagName === "IMG") art.replaceWith(Object.assign(document.createElement("span"), { id: "mini-art", className: "art art-empty", textContent: "♪" }));
+  const list = code ? liveMembers() : [];
+  $("#mini-title").textContent = track ? track.title : code ? `Room ${code}` : "Dengar bareng";
+  $("#mini-sub").textContent = code ? `${track ? `${track.artist} · ` : ""}${list.length} di room` : "Buat atau gabung room";
+  $("#mini-members").replaceChildren(...list.slice(0, 3).map((m) => avatar(m.name, m.avatar, "xs")));
+}
+
+// Fractional ordering: moving an item only rewrites that item's `order`.
+async function moveItem(key, toIndex) {
+  const rest = sortedQueue().filter((it) => it.key !== key);
+  const before = rest[toIndex - 1]?.order;
+  const after = rest[toIndex]?.order;
+  const order = before == null ? (after ?? 0) - 1 : after == null ? before + 1 : (before + after) / 2;
+  await fb.setQueueOrder(code, key, order);
+}
+const nextOrder = () => Math.max(0, ...Object.values(queueItems).map((q) => q.order)) + 1;
+
+// Playback controls: the host acts directly; guests send a command the host's app carries out.
+async function control(a, extra = {}) {
+  if (!isHost()) return fb.sendCommand(code, a, extra);
+  const q = sortedQueue();
+  if (a === "play") await player.play();
+  else if (a === "pause") await player.pause();
+  else if (a === "next") await (q[0] ? playItem(q[0].key) : player.next());
+  else if (a === "prev") await player.prev();
+  else if (a === "seek" && typeof extra.pos === "number") await player.seek(extra.pos);
+  else if (a === "playItem" && extra.key) await playItem(extra.key);
+  setTimeout(poll, 400); // show the result right away
+}
+
+async function playItem(key) {
+  const it = queueItems[key];
+  if (!it) return;
+  await player.playTrack(it.id);
+  await fb.removeQueueItem(code, key);
+  setTimeout(poll, 400);
+}
+
+$("#add-form").onsubmit = async (e) => {
+  e.preventDefault();
+  const text = $("#add-text").value.trim();
+  if (!text || !code) return;
+  const btn = $("#add-form button");
+  btn.disabled = true;
+  btn.textContent = "…";
+  try {
+    if (isHost()) {
+      // The host can look songs up itself: straight into the queue.
+      const t = await resolveTrack(text);
+      if (!t) throw new Error(`"${text}" tidak ketemu di Spotify.`);
+      await fb.addQueueItem(code, t, { uid: room.uid, name: hostProfile.name, avatar: hostProfile.avatar }, nextOrder());
+    } else {
+      await fb.requestSong(code, $("#listener-name").value.trim() || "Pendengar", text);
+    }
+    $("#add-text").value = "";
+  } catch (err) {
+    status(err.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Tambah";
+  }
+};
+
+// ---------- Host ----------
 
 const roomParam = new URLSearchParams(location.search).get("room")?.toUpperCase();
 if (roomParam) {
@@ -54,8 +249,6 @@ if (roomParam) {
   await host();
 }
 requestAnimationFrame(tick);
-
-// ---------- Host: Spotify login, optional room ----------
 
 async function host() {
   try {
@@ -66,14 +259,28 @@ async function host() {
   if (!isLoggedIn()) {
     $("#login").hidden = false;
     $("#login").onclick = login;
-    return;
+    $("#hero-login").hidden = false;
+    $("#hero-login").onclick = login;
+    return showHero();
   }
   $("#logout").hidden = false;
   $("#logout").onclick = () => { logout(); location.reload(); };
-  $("#room").hidden = false;
-  $("#room").onclick = () => (room ? endRoom() : startRoom());
+  $("#hero-create").hidden = false;
+  $("#hero-create").onclick = () => startRoom();
+  $("#end-room").onclick = () => endRoom();
+  for (const [id, keyName] of [["#set-guest", "guestControl"], ["#set-approval", "approval"]]) {
+    $(id).onchange = () => {
+      settingsState = { ...settingsState, [keyName]: $(id).checked };
+      localStorage.setItem("room_settings", JSON.stringify(settingsState));
+      roomInfo.settings = settingsState;
+      renderRoom();
+      poll(); // publish the new settings now
+    };
+  }
+  getMe().then((p) => (hostProfile = p), () => {});
   const savedCode = localStorage.getItem("host_room");
   if (savedCode) startRoom(savedCode); // resume after reload; same anonymous uid still owns it
+  else showHero();
 
   poll();
   // Chrome throttles a hidden tab's own timers to about once a minute, but not a worker's, so the
@@ -83,43 +290,42 @@ async function host() {
   document.addEventListener("visibilitychange", poll); // resync right away when reopened
 }
 
-async function startRoom(code) {
+async function startRoom(wanted) {
   fb ??= await import("./firebase.js");
   for (let attempt = 0; attempt < 5; attempt++) {
-    const tryCode = code ?? randomCode();
+    const tryCode = wanted ?? randomCode();
     try {
-      room = { code: tryCode, ...(await fb.hostRoom(tryCode)) };
+      room = { code: tryCode, off: [], ...(await fb.hostRoom(tryCode)) };
       break;
     } catch (err) {
       console.warn(err);
-      if (code) { code = undefined; localStorage.removeItem("host_room"); } // saved room lost, make a new one
+      if (wanted) { wanted = undefined; localStorage.removeItem("host_room"); } // saved room lost, make a new one
     }
   }
   if (!room) return status("Gagal membuat room. Cek konfigurasi Firebase.");
-  localStorage.setItem("host_room", room.code);
-  code = room.code; // the claimed code (may differ from a saved one that was lost)
-  $("#host-panel").hidden = false;
-  room.offListeners = fb.watchListeners(code, (l) => renderListeners(code, (listenerData = l)));
-  room.offRequests = fb.watchRequests(code, (r) => hostRequests(code, (requests = r)));
+  code = room.code;
+  myUid = room.uid;
+  localStorage.setItem("host_room", code);
+  roomInfo = { hostUid: room.uid, host: hostProfile, settings: settingsState };
+  room.off.push(
+    fb.watchListeners(code, (l) => { members = l; renderRoom(); }),
+    fb.watchQueue(code, (q) => { queueItems = q; renderRoom(); }),
+    fb.watchRequests(code, (r) => { requests = r; hostRequests(r); renderRoom(); }),
+    fb.watchCommands(code, onCommand),
+  );
   if (lastId && lyrics.length) fb.saveSharedLyrics(lastId, lyrics).catch(() => {}); // song already on screen
-  const link = `${location.origin}${location.pathname}?room=${room.code}`;
-  $("#room").textContent = "Akhiri Room";
-  $("#room-info").hidden = false;
-  $("#room-code").textContent = room.code;
-  $("#room-share").onclick = () =>
-    navigator.share ? navigator.share({ title: "Karaoke bareng", url: link }) : navigator.clipboard.writeText(link);
+  showSession(true);
   poll();
 }
 
 async function endRoom() {
-  room.offListeners();
-  room.offRequests();
+  room.off.forEach((off) => off());
   await room.end();
   room = null;
-  $("#host-panel").hidden = true;
+  code = null;
+  members = queueItems = requests = {};
   localStorage.removeItem("host_room");
-  $("#room").textContent = "Buat Room";
-  $("#room-info").hidden = true;
+  showHero();
 }
 
 function randomCode() {
@@ -127,123 +333,49 @@ function randomCode() {
   return Array.from(crypto.getRandomValues(new Uint8Array(6)), (v) => chars[v % chars.length]).join("");
 }
 
-// ---------- Room panels (host + listener) ----------
-
-// Names and request text come from other people: only ever set them via textContent.
-function item(main, sub, ...buttons) {
-  const li = document.createElement("li");
-  const span = document.createElement("span");
-  span.textContent = main;
-  if (sub) span.append(Object.assign(document.createElement("small"), { textContent: ` · ${sub}` }));
-  li.append(span, ...buttons);
-  return li;
-}
-// action may be async: the button is disabled and relabelled until it finishes, so a click is visible.
-function button(label, action, secondary = false, busyLabel = "…") {
-  const b = Object.assign(document.createElement("button"), { type: "button", textContent: label, className: secondary ? "secondary" : "" });
-  b.onclick = async () => {
-    b.disabled = true;
-    b.textContent = busyLabel;
-    try {
-      await action();
-    } catch (e) {
-      status(e.message);
-    } finally {
-      b.disabled = false; // usually gone already: the list re-renders from Firebase
-      b.textContent = label;
-    }
-  };
-  return b;
+// Guest commands (only honoured while guest control is on; the rules also refuse them otherwise).
+const lastCommand = new Map(); // uid -> time, max one command per guest per 0.5 s
+function onCommand(c) {
+  if (!settingsState.guestControl || !c?.by) return;
+  if (Date.now() - (lastCommand.get(c.by) ?? 0) < 500) return;
+  lastCommand.set(c.by, Date.now());
+  control(c.a, c).catch(onError);
 }
 
-// Upcoming songs in the host's Spotify queue (host: fetched; listener: from the room).
-function renderQueue(selector, queue) {
-  const len = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
-  $(selector).replaceChildren(
-    ...(queue.length ? queue.map((q, i) => item(`${i + 1}. ${q.title} — ${q.artist}`, len(q.durationSec))) : [empty("Antrian kosong")]),
-  );
-}
-const empty = (text) => item(text);
-const VIA = { web: "Web", youtube: "YouTube", spotify: "Spotify Web" };
-const requestTitle = (r) => (r.track ? `${r.track.title} — ${r.track.artist}` : r.text);
-const requestState = (r) => (r.status === "queued" ? "di queue" : r.status === "notfound" ? "tidak ketemu" : r.track ? "menunggu host" : "mencari…");
-const sortedRequests = (reqs) => Object.entries(reqs).sort(([, a], [, b]) => a.at - b.at);
-
-let liveListeners = 0;
-const updateHostSummary = () =>
-  ($("#host-summary").textContent = `Room · ${liveListeners} pendengar · ${Object.keys(requests).length} request`);
-
-function renderListeners(code, data) {
-  // No heartbeat for 45 s (3 missed) = gone, e.g. a closed extension tab that never said goodbye.
-  const live = Object.entries(data).filter(([, l]) => fb.serverNow() - l.at < 45_000);
-  liveListeners = live.length;
-  $("#listener-list").replaceChildren(
-    ...(live.length
-      ? live.map(([uid, l]) =>
-          item(l.name, VIA[l.via] ?? l.via, button("Kick", () => confirm(`Keluarkan ${l.name} dari room?`) && fb.kick(code, uid), true, "Kick…")))
-      : [empty("Belum ada pendengar")]),
-  );
-  updateHostSummary();
-}
-setInterval(() => room && renderListeners(room.code, listenerData), 10_000); // drop stale entries
-
+// Listener requests are free text or links: look them up with the host's Spotify login, once each.
+// Approval off: straight into the room queue. Approval on: wait for the host's "Setujui".
 const resolving = new Set();
-function hostRequests(code, reqs) {
-  // New requests are free text or links: look them up with the host's Spotify login, once each.
-  for (const [id, r] of Object.entries(reqs)) {
-    if (r.track || r.status || resolving.has(id)) continue;
-    resolving.add(id);
+function hostRequests(reqs) {
+  for (const [key, r] of Object.entries(reqs)) {
+    if (r.track || r.status || resolving.has(key)) continue;
+    resolving.add(key);
     resolveTrack(r.text)
-      .then((t) => fb.updateRequest(code, id, t ? { track: t } : { status: "notfound" }))
-      .catch((e) => status(e.message))
-      .finally(() => resolving.delete(id));
+      .then(async (t) => {
+        if (!t) return fb.updateRequest(code, key, { status: "notfound" });
+        if (settingsState.approval) return fb.updateRequest(code, key, { track: t });
+        await fb.addQueueItem(code, t, { uid: r.by, name: r.name }, nextOrder());
+        await fb.removeRequest(code, key);
+      })
+      .catch(onError)
+      .finally(() => resolving.delete(key));
   }
-  const entries = sortedRequests(reqs);
-  $("#host-requests").replaceChildren(
-    ...(entries.length
-      ? entries.map(([id, r]) => {
-          const remove = () => fb.removeRequest(code, id);
-          // Once it's in the Spotify queue the request is done: it moves to the "Antrian" list instead.
-          const queue = async () => {
-            await addToQueue(r.track.id);
-            await fb.removeRequest(code, id);
-            status(`✓ "${r.track.title}" masuk antrian`);
-            refreshQueue();
-          };
-          const buttons = r.track ? [button("+ Queue", queue, false, "Menambahkan…"), button("Tolak", remove, true, "…")] : [button("Hapus", remove, true, "…")];
-          return item(requestTitle(r), `${r.name} · ${requestState(r)}`, ...buttons);
-        })
-      : [empty("Belum ada request")]),
-  );
-  updateHostSummary();
+}
+async function approveRequest(key) {
+  const r = requests[key];
+  if (!r?.track) return;
+  await fb.addQueueItem(code, r.track, { uid: r.by, name: r.name }, nextOrder());
+  await fb.removeRequest(code, key);
 }
 
-function renderListenerRequests(code, reqs, myUid) {
-  const entries = sortedRequests(reqs);
-  $("#listener-summary").textContent = `Request lagu (${entries.length})`;
-  $("#listener-requests").replaceChildren(
-    ...entries.map(([id, r]) =>
-      item(
-        requestTitle(r),
-        `${r.name} · ${requestState(r)}`,
-        ...(r.by === myUid && r.status !== "queued" ? [button("Batal", () => fb.removeRequest(code, id), true, "…")] : []),
-      ),
-    ),
-  );
-}
-
-let upcoming = []; // host: next songs in the Spotify queue
-let queueFor = null; // track id `upcoming` was fetched for
-let queueAt = 0;
+let upcomingFor = null; // track id `upcoming` was fetched for
+let upcomingAt = 0;
 let endTimer;
+let advanceTimer;
+let advancedFrom = null; // track id we already scheduled a queue advance for
 
-function refreshQueue() {
-  queueAt = Date.now();
-  getQueue().then((q) => {
-    upcoming = q;
-    prefetchLyrics(q[0]);
-    renderQueue("#host-queue", q);
-  }, () => {});
+function refreshUpcoming() {
+  upcomingAt = Date.now();
+  getQueue().then((q) => { upcoming = q; renderRoom(); }, () => {});
 }
 
 async function poll() {
@@ -256,23 +388,29 @@ async function poll() {
     const left = t?.isPlaying ? t.durationSec * 1000 - t.progressMs : Infinity;
     if (left < 3500) endTimer = setTimeout(poll, Math.max(left, 0) + 300);
     if (room && t) {
-      // The queue changes rarely (song change, a request was queued): refresh on change or every 20 s.
-      if (t.id !== queueFor || Date.now() - queueAt > 20_000) {
-        queueFor = t.id;
-        refreshQueue();
+      if (t.id !== upcomingFor || Date.now() - upcomingAt > 20_000) {
+        upcomingFor = t.id;
+        refreshUpcoming();
       }
-      // Right after a song change the old answer still lists the song now playing first: drop it.
-      t.queue = upcoming[0]?.id === t.id ? upcoming.slice(1) : upcoming;
-      t.next = t.queue[0] ?? null;
-    }
-    if (room) {
-      room.publish(t).catch(console.error);
-      // A requested song that is now playing is done.
-      for (const [id, r] of Object.entries(requests)) {
-        if (t && r.track?.id === t.id) fb.removeRequest(room.code, id).catch(console.error);
+      // Drop Spotify's stale answer that still lists the song now playing first.
+      if (upcoming[0]?.id === t.id) upcoming = upcoming.slice(1);
+      const q = sortedQueue();
+      // A queued song that is now playing (e.g. picked in Spotify itself) is done.
+      for (const it of q) if (it.id === t.id) fb.removeQueueItem(code, it.key).catch(() => {});
+      const roomNext = q.find((it) => it.id !== t.id);
+      // The room queue plays before Spotify's own "up next": start it right as this song ends.
+      if (roomNext && left < 3500 && advancedFrom !== t.id) {
+        advancedFrom = t.id;
+        clearTimeout(advanceTimer);
+        advanceTimer = setTimeout(() => playItem(roomNext.key).catch(onError), Math.max(left - 250, 0));
       }
+      t.next = roomNext ?? upcoming[0] ?? null;
+      t.upcoming = upcoming;
+      prefetchLyrics(t.next);
     }
+    if (room) room.publish(t, { host: hostProfile, settings: settingsState }).catch(console.error);
     showTrack(t);
+    renderRoom();
   } catch (err) {
     console.error(err);
     status(err.message);
@@ -288,72 +426,68 @@ function predict(t) {
   return Date.now() < endAt ? t : { ...t.next, progressMs: 0, isPlaying: true, fetchedAt: endAt, next: null };
 }
 
-async function listen(code) {
+async function listen(roomCode) {
+  code = roomCode;
   status(`Room ${code}: menghubungkan…`);
-  let player;
-  [fb, player] = await Promise.all([import("./firebase.js"), import("./embed.js")]);
+  $("#hero").hidden = true;
+  let embed;
+  [fb, embed] = await Promise.all([import("./firebase.js"), import("./embed.js")]);
   $("#player").hidden = false;
-  $("#listener-panel").hidden = false;
-  const ready = player.createPlayer($("#embed"), status);
+  const ready = embed.createPlayer($("#embed"), status);
 
   const nameInput = $("#listener-name");
   nameInput.value = localStorage.getItem("listener_name") ?? "";
   nameInput.oninput = () => localStorage.setItem("listener_name", nameInput.value.trim());
   const getName = () => nameInput.value.trim() || "Pendengar";
+  $("#end-room").onclick = () => (location.href = location.pathname);
 
   let kicked = false;
-  let myUid;
-  // Follows the host, switching to the queued next song by itself the moment the current one should end
+  // Follows the host, switching to the next song by itself the moment the current one should end
   // (the host's own update arrives a few seconds later and corrects it if the host did something else).
   let hostTrack = null;
   const follow = () => {
     const t = predict(hostTrack);
-    if (t?.id !== track?.id) showTrack(t);
+    if (t?.id !== track?.id) { showTrack(t); renderRoom(); }
     else track = t;
-    player.sync(t);
+    embed.sync(t);
   };
   try {
     myUid = await fb.joinRoom(code, getName, {
-      onTrack: (t) => {
+      onRoom: (r) => {
         if (kicked) return;
-        hostTrack = t;
-        prefetchLyrics(t?.next);
-        renderQueue("#listener-queue", t?.queue ?? []);
+        roomInfo = { hostUid: r.hostUid ?? null, host: r.host ?? null, settings: r.settings ?? {} };
+        hostTrack = r.track;
+        upcoming = r.track?.upcoming ?? [];
+        prefetchLyrics(r.track?.next);
         follow();
-        if (!t) status(`Room ${code}: host belum memutar lagu (atau room tidak ada).`);
+        renderRoom();
+        if (!r.track) status(r.hostUid ? `Room ${code}: host belum memutar lagu.` : `Room ${code} tidak ada atau sudah diakhiri.`);
       },
       onKicked: () => {
         kicked = true;
-        player.sync(null); // pause
+        embed.sync(null); // pause
         showTrack(null);
         $("#join").hidden = true;
-        $("#listener-panel").hidden = true;
+        code = null;
+        showHero("Anda dikeluarkan dari room oleh host.");
         status("Anda dikeluarkan dari room oleh host.");
       },
     });
   } catch (err) {
     return status(`Gagal masuk room: ${err.message}`);
   }
+  showSession(false);
   setInterval(() => !kicked && follow(), 500);
-
-  fb.watchRequests(code, (r) => renderListenerRequests(code, r, myUid));
-  $("#request-form").onsubmit = async (e) => {
-    e.preventDefault();
-    const text = $("#request-text").value.trim();
-    if (!text) return;
-    try {
-      await fb.requestSong(code, getName(), text);
-      $("#request-text").value = "";
-    } catch (err) {
-      status(`Request gagal: ${err.message}`);
-    }
-  };
+  fb.watchListeners(code, (l) => { members = l; renderRoom(); });
+  fb.watchQueue(code, (q) => { queueItems = q; renderRoom(); });
+  fb.watchRequests(code, (r) => { requests = r; renderRoom(); });
+  setInterval(() => code && renderRoom(), 10_000); // drop members whose heartbeats stopped
 
   await ready;
   if (kicked) return;
   $("#join").hidden = false;
   $("#join").onclick = () => {
-    player.start(track);
+    embed.start(track);
     $("#join").hidden = true;
   };
 }
@@ -471,6 +605,12 @@ function tick() {
       $("#elapsed").textContent = mmss(sec);
       $("#length").textContent = mmss(track.durationSec);
       $("#progress").value = track.durationSec ? sec / track.durationSec : 0;
+      // Same clock on the room panel's now playing card, when it's showing.
+      const npBar = document.getElementById("np-bar");
+      if (npBar) {
+        document.getElementById("np-elapsed").textContent = mmss(sec);
+        npBar.value = track.durationSec ? sec / track.durationSec : 0;
+      }
     }
   }
   if (track && lyrics.length) {

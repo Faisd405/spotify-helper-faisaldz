@@ -23,7 +23,7 @@
     button { background: #1db954; color: #000; border: 0; border-radius: 999px; padding: 10px 20px; font-weight: 700; font-size: 1rem; }
     button { cursor: pointer; }
     button:disabled { cursor: progress; opacity: .6; }
-    #logout, #room, #room-share, #ext-btn { background: #333; color: #fff; padding: 6px 12px; font-size: .8rem; }
+    #logout, #ext-btn { background: #333; color: #fff; padding: 6px 12px; font-size: .8rem; }
     /* Extensions only exist on desktop browsers. */
     @media (pointer: coarse) { #ext-btn { display: none; } }
     #ext-dialog { max-width: 440px; border: 0; border-radius: 14px; padding: 18px 20px; background: #282828; color: #fff; }
@@ -35,23 +35,97 @@
     #ext-dialog a { color: var(--active); font-weight: 700; }
     #ext-dialog .small { padding: 2px 8px; font-size: .75rem; background: #333; color: #fff; }
     #ext-dialog form { display: flex; justify-content: flex-end; margin: 0; }
-    #dock { position: fixed; left: 0; right: 0; bottom: 0; z-index: 2; padding: 0 12px calc(12px + env(safe-area-inset-bottom)); pointer-events: none; }
-    #room-info { margin: 0 0 4px; }
-    .panel { pointer-events: auto; max-width: 560px; margin: 0 auto; padding: 10px 14px; background: #282828; color: #fff; border-radius: 12px; box-shadow: 0 -4px 24px #0009; }
-    .panel-body { max-height: 50vh; overflow-y: auto; overscroll-behavior: contain; }
-    .panel[hidden] { display: none; }
-    .panel summary { cursor: pointer; font-weight: 600; }
-    .panel h4 { margin: 10px 0 4px; font-size: .85rem; opacity: .7; }
-    .panel ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
-    .panel li { display: flex; align-items: center; gap: 8px; font-size: .9rem; }
-    .panel li span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-    .panel li small { opacity: .6; }
-    .panel li button, #request-form button { padding: 4px 10px; font-size: .8rem; }
-    .panel li button.secondary { background: #333; color: #fff; }
-    .panel label { display: grid; gap: 4px; margin-top: 8px; font-size: .85rem; }
-    .panel input { padding: 8px; border-radius: 6px; border: 0; }
-    #request-form { display: flex; gap: 6px; margin-top: 8px; }
-    #request-form input { flex: 1; }
+    #ext-dialog { max-height: 90vh; overflow-y: auto; }
+    #ext-dialog h3 + p, #ext-dialog h3:not(:first-child) { margin-top: 14px; }
+    #ext-dialog pre { margin: 6px 0 0; padding: 8px; background: #0006; border-radius: 6px; font-size: .72rem; white-space: pre-wrap; word-break: break-all; }
+    /* ---------- Room panel (Jam-style). Desktop: right sidebar. Phone: bottom sheet. Closed: mini player. ---------- */
+    #room-panel { position: fixed; z-index: 3; background: #181818; color: #fff; display: flex; flex-direction: column; box-shadow: 0 0 32px #000a; }
+    #room-panel .panel-body { overflow-y: auto; overscroll-behavior: contain; padding: 4px 16px 16px; display: grid; gap: 16px; align-content: start; }
+    #room-panel:not(.open) .panel-body { display: none; }
+    #mini { display: flex; align-items: center; gap: 10px; padding: 10px 14px; cursor: pointer; background: #282828; border: 0; border-radius: 0; color: #fff; font: inherit; text-align: left; width: 100%; }
+    #mini .mini-text { flex: 1; min-width: 0; display: grid; }
+    #mini .mini-text b, #mini .mini-text span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .85rem; }
+    #mini .member-stack { margin: 0; }
+    #mini .chev { opacity: .7; transition: transform .2s; }
+    #room-panel.open #mini .chev { transform: rotate(180deg); }
+    @media (max-width: 899px) {
+      #room-panel { left: 0; right: 0; bottom: 0; border-radius: 14px 14px 0 0; overflow: hidden; padding-bottom: env(safe-area-inset-bottom); }
+      #room-panel.open .panel-body { max-height: 72vh; }
+    }
+    @media (min-width: 900px) {
+      body.panel-open { padding-right: 360px; }
+      #room-panel.open { top: 0; right: 0; bottom: 0; width: 360px; }
+      #room-panel.open .panel-body { flex: 1; }
+      #room-panel.open #mini .chev { transform: rotate(90deg); }
+      #room-panel:not(.open) { right: 16px; bottom: 16px; width: 320px; border-radius: 12px; overflow: hidden; }
+    }
+    .muted { opacity: .65; }
+    .grow { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+    .panel-body h4 { margin: 0 0 8px; font-size: .7rem; letter-spacing: .1em; text-transform: uppercase; opacity: .6; }
+    .panel-body ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+    .panel-body li { display: flex; align-items: center; gap: 10px; font-size: .9rem; }
+    .panel-body input:not([type="checkbox"]) { padding: 9px 10px; border-radius: 8px; border: 1px solid #ffffff22; background: #2a2a2a; color: #fff; font-size: .9rem; min-width: 0; }
+    .panel-body button.small, .panel-body button.secondary { padding: 6px 12px; font-size: .8rem; }
+    .panel-body button.secondary { background: #333; color: #fff; }
+    .panel-body button.icon { background: transparent; color: #fff; padding: 4px 7px; font-size: .85rem; opacity: .7; }
+    .panel-body button.icon:hover { opacity: 1; background: #ffffff14; }
+    .avatar { width: 32px; height: 32px; border-radius: 50%; flex: none; object-fit: cover; display: inline-grid; place-items: center; font-size: .75rem; font-weight: 700; color: #fff; }
+    .avatar.sm { width: 28px; height: 28px; font-size: .65rem; }
+    .avatar.xs { width: 20px; height: 20px; font-size: .55rem; }
+    .art { width: 40px; height: 40px; border-radius: 4px; object-fit: cover; flex: none; }
+    .art-empty { display: inline-grid; place-items: center; background: #333; }
+    /* hero */
+    #hero { text-align: center; padding: 20px 8px; display: grid; gap: 12px; }
+    #hero[hidden] { display: none; }
+    #hero h2 { margin: 0; font-size: 1.3rem; }
+    #hero .or { opacity: .5; font-size: .8rem; }
+    #hero form, #add-form { display: flex; gap: 6px; }
+    #hero form input, #add-form input { flex: 1; }
+    #add-form { margin-bottom: 8px; }
+    /* session */
+    #session { display: grid; gap: 16px; }
+    #session[hidden] { display: none; }
+    .session-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+    .live { color: var(--active); font-size: .7rem; font-weight: 800; letter-spacing: .1em; }
+    .live::before { content: "● "; animation: pulse 1.6s infinite; }
+    @keyframes pulse { 50% { opacity: .3; } }
+    .code { font-family: ui-monospace, monospace; font-size: 1.1rem; font-weight: 800; letter-spacing: .12em; flex: 1; }
+    #invite { display: grid; justify-items: center; gap: 8px; padding: 12px; background: #222; border-radius: 10px; }
+    #invite[hidden] { display: none; }
+    #invite img { width: 180px; height: 180px; border-radius: 8px; background: #fff; }
+    #invite .link { font-size: .75rem; opacity: .7; word-break: break-all; text-align: center; }
+    .card { background: #222; border-radius: 10px; padding: 12px; }
+    .np-row { display: flex; gap: 12px; align-items: center; }
+    .np-art { width: 64px; height: 64px; border-radius: 6px; object-fit: cover; flex: none; }
+    .np-text { flex: 1; min-width: 0; display: grid; gap: 2px; }
+    .np-text b, .np-text span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .np-progress { display: flex; align-items: center; gap: 6px; font-size: .7rem; opacity: .8; font-variant-numeric: tabular-nums; margin-top: 4px; }
+    .np-progress progress { flex: 1; height: 4px; appearance: none; border: 0; border-radius: 2px; background: #ffffff33; }
+    .np-progress progress::-webkit-progress-bar { background: #ffffff33; border-radius: 2px; }
+    .np-progress progress::-webkit-progress-value { background: var(--active); border-radius: 2px; }
+    .np-progress progress::-moz-progress-bar { background: var(--active); border-radius: 2px; }
+    .np-controls { display: flex; justify-content: center; gap: 14px; margin-top: 10px; }
+    .np-controls .ctrl { background: #ffffff14; color: #fff; width: 40px; height: 40px; padding: 0; font-size: 1rem; }
+    .np-controls .ctrl:nth-child(2) { background: #fff; color: #000; }
+    .member-stack { display: flex; margin-bottom: 8px; }
+    .member-stack .avatar { margin-right: -8px; border: 2px solid #181818; }
+    .badge { font-size: .6rem; font-weight: 800; letter-spacing: .08em; background: var(--active); color: #000; padding: 2px 6px; border-radius: 4px; }
+    .q-item { padding: 4px; border-radius: 6px; }
+    .q-item[draggable="true"] { cursor: grab; }
+    .q-item.dragging { opacity: .4; }
+    .q-item:hover { background: #ffffff0d; }
+    .q-num { width: 16px; text-align: right; font-size: .75rem; flex: none; }
+    .q-text { flex: 1; min-width: 0; display: grid; }
+    .q-text b, .q-text span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .85rem; }
+    .q-text span { font-size: .75rem; }
+    .empty { justify-content: center; padding: 8px; font-size: .8rem; }
+    .pending { font-size: .8rem; }
+    #upcoming-wrap summary { cursor: pointer; font-size: .7rem; letter-spacing: .1em; text-transform: uppercase; opacity: .6; margin-bottom: 6px; }
+    #host-settings { display: grid; gap: 8px; }
+    #host-settings[hidden], #me-name[hidden] { display: none; }
+    .toggle { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: .85rem; }
+    .toggle input { width: 20px; height: 20px; accent-color: var(--active); }
+    #me-name { display: grid; gap: 4px; font-size: .8rem; }
     #player { position: sticky; top: 56px; z-index: 1; padding: 0 16px 8px; background: var(--bg); display: grid; gap: 8px; }
     #player[hidden] { display: none; }
     #status { padding: 0 16px; opacity: .7; }
@@ -79,7 +153,6 @@
       <div id="clock" hidden><span id="elapsed">0:00</span><progress id="progress" max="1" value="0"></progress><span id="length">0:00</span></div>
     </div>
     <button id="login" hidden>Login Spotify</button>
-    <button id="room" hidden>Buat Room</button>
     <button id="logout" hidden>Logout</button>
     <button id="ext-btn" type="button" title="Ikut room lewat YouTube / Spotify Web">🧩 Extension</button>
     <details id="settings">
@@ -104,35 +177,60 @@
   </section>
   <p id="status"></p>
   <ol id="lyrics"></ol>
-  <!-- Room management is docked to the bottom of the screen: the lyric list auto-scrolls to the active
-       line, so anything placed in the page flow above it would keep scrolling out of reach. -->
-  <div id="dock">
-    <details id="host-panel" class="panel" hidden>
-      <summary id="host-summary">Room</summary>
-      <div class="panel-body">
-        <p id="room-info" hidden>Room <b id="room-code"></b> <button id="room-share" type="button">Bagikan link</button></p>
-        <h4>Antrian berikutnya</h4>
-        <ul id="host-queue"></ul>
-        <h4>Pendengar</h4>
-        <ul id="listener-list"></ul>
-        <h4>Request lagu</h4>
-        <ul id="host-requests"></ul>
-      </div>
-    </details>
-    <details id="listener-panel" class="panel" hidden>
-      <summary id="listener-summary">Request lagu</summary>
-      <div class="panel-body">
-        <label>Nama Anda <input id="listener-name" maxlength="40" placeholder="Pendengar" /></label>
-        <form id="request-form">
-          <input id="request-text" maxlength="200" required placeholder="Judul lagu atau link Spotify" />
-          <button>Request</button>
-        </form>
-        <ul id="listener-requests"></ul>
-        <h4>Antrian berikutnya</h4>
-        <ul id="listener-queue"></ul>
-      </div>
-    </details>
-  </div>
+  <!-- Room panel (Jam-style), outside the lyric flow so lyric auto-scroll never moves it. Filled by main.js. -->
+  <aside id="room-panel">
+    <button id="mini" type="button" aria-expanded="false" title="Buka / tutup panel room">
+      <span id="mini-art" class="art art-empty">♪</span>
+      <span class="mini-text"><b id="mini-title">Dengar bareng</b><span id="mini-sub" class="muted">Buat atau gabung room</span></span>
+      <span id="mini-members" class="member-stack"></span>
+      <span class="chev">▲</span>
+    </button>
+    <div class="panel-body">
+      <section id="hero">
+        <h2>Dengar bareng, tetap sinkron</h2>
+        <p class="muted">Karaoke dengan lirik romaji bersama teman, dari HP, web, YouTube, atau Spotify desktop.</p>
+        <button id="hero-create" type="button" hidden>Buat room</button>
+        <button id="hero-login" type="button" hidden>Login Spotify untuk jadi host</button>
+        <div class="or">atau gabung</div>
+        <form id="hero-join"><input id="hero-code" placeholder="Kode room atau link" autocomplete="off" /><button>Gabung</button></form>
+      </section>
+      <section id="session" hidden>
+        <div class="session-head">
+          <span class="live">LIVE</span>
+          <span class="code" id="room-code"></span>
+          <button id="copy-link" class="small secondary" type="button">Salin link</button>
+          <button id="invite-btn" class="small secondary" type="button">Undang</button>
+          <button id="end-room" class="small secondary" type="button" hidden>Akhiri</button>
+        </div>
+        <div id="invite" hidden>
+          <img id="qr" alt="QR untuk gabung room" />
+          <span class="link" id="invite-link"></span>
+          <button id="share-link" class="small" type="button">Bagikan</button>
+        </div>
+        <div>
+          <h4>Sedang diputar</h4>
+          <div id="np" class="card"></div>
+        </div>
+        <div>
+          <h4>Di room <span id="member-count"></span></h4>
+          <div id="members"></div>
+        </div>
+        <div>
+          <h4>Antrian</h4>
+          <form id="add-form"><input id="add-text" maxlength="200" required placeholder="Tambah lagu: judul atau link Spotify" /><button class="small">Tambah</button></form>
+          <ul id="pending"></ul>
+          <ul id="queue"></ul>
+        </div>
+        <details id="upcoming-wrap"><summary>Lalu dari Spotify</summary><ul id="upcoming"></ul></details>
+        <div id="host-settings" hidden>
+          <h4>Pengaturan room</h4>
+          <label class="toggle">Tamu boleh mengontrol pemutaran <input type="checkbox" id="set-guest" /></label>
+          <label class="toggle">Lagu dari tamu perlu disetujui <input type="checkbox" id="set-approval" /></label>
+        </div>
+        <label id="me-name" hidden>Nama Anda <input id="listener-name" maxlength="40" placeholder="Pendengar" /></label>
+      </section>
+    </div>
+  </aside>
   <dialog id="ext-dialog">
     <h3>Install extension Listen Along</h3>
     <p>Ikut room lewat YouTube, YouTube Music, atau Spotify Web Player di Chrome / Edge desktop, plus request lagu dari popup-nya.</p>
@@ -145,6 +243,15 @@
       <li>Buka YouTube / Spotify Web, klik ikon 🧩 → <b>Listen Along</b>, masukkan kode room<span id="ext-room"></span>.</li>
     </ol>
     <p>Update: download lagi, timpa folder lama, lalu klik <b>Reload</b> di <code>chrome://extensions</code>.</p>
+    <h3>Spotify desktop (Spicetify)</h3>
+    <p>Host atau ikut room langsung dari app Spotify desktop: lagu yang sama persis, tanpa batas Web API. Butuh
+      <a href="https://spicetify.app" target="_blank" rel="noopener">Spicetify</a> dan Spotify dari spotify.com (versi Microsoft Store tidak didukung).</p>
+    <ol>
+      <li>Jalankan di PowerShell <button id="spice-copy" class="small" type="button">Salin</button>
+        <pre id="spice-cmd"></pre></li>
+      <li>Buka Spotify, klik ikon <b>Listen Along</b> di bar atas, lalu buat room atau masukkan kode room.</li>
+    </ol>
+    <p>Spotify update? Jalankan <code>spicetify backup apply</code>.</p>
     <form method="dialog"><button>Tutup</button></form>
   </dialog>
   <script type="module" src="./src/main.js"></script>

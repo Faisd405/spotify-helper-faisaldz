@@ -87,6 +87,9 @@ async function spotifyError(res) {
   return new Error(`Spotify error ${res.status}${msg ? `: ${msg}` : ""}`);
 }
 
+// Album images come largest first (640, 300, 64): the 300 px one is enough for cards and thumbnails.
+const pickArt = (images) => (images?.[1] ?? images?.[0])?.url ?? null;
+
 export async function getNowPlaying() {
   const res = await fetch("https://api.spotify.com/v1/me/player/currently-playing", {
     headers: { Authorization: `Bearer ${await getToken()}` },
@@ -106,6 +109,7 @@ export async function getNowPlaying() {
     title: data.item.name,
     artist: data.item.artists[0].name,
     album: data.item.album.name,
+    art: pickArt(data.item.album.images),
     durationSec: Math.round(data.item.duration_ms / 1000),
     progressMs: data.progress_ms,
     isPlaying: data.is_playing,
@@ -116,7 +120,7 @@ export async function getNowPlaying() {
 async function api(path, init = {}) {
   const res = await fetch(`https://api.spotify.com/v1${path}`, {
     ...init,
-    headers: { Authorization: `Bearer ${await getToken()}` },
+    headers: { Authorization: `Bearer ${await getToken()}`, ...(init.body ? { "Content-Type": "application/json" } : {}) },
   });
   if (res.status === 429) throw new Error("Rate limit Spotify, coba lagi sebentar.");
   if (res.status === 404 && path.startsWith("/me/player")) throw new Error("Tidak ada device Spotify yang aktif. Putar sesuatu dulu.");
@@ -125,7 +129,14 @@ async function api(path, init = {}) {
   return text ? JSON.parse(text) : null;
 }
 
-const toTrack = (t) => ({ id: t.id, title: t.name, artist: t.artists[0].name });
+const toTrack = (t) => ({
+  id: t.id,
+  title: t.name,
+  artist: t.artists[0].name,
+  album: t.album?.name ?? "",
+  art: pickArt(t.album?.images),
+  durationSec: Math.round(t.duration_ms / 1000),
+});
 
 // A listener request is free text or a Spotify track link/URI.
 export async function resolveTrack(text) {
@@ -136,7 +147,6 @@ export async function resolveTrack(text) {
   return t ? toTrack(t) : null;
 }
 
-export const addToQueue = (id) => api(`/me/player/queue?${new URLSearchParams({ uri: `spotify:track:${id}` })}`, { method: "POST" });
 
 // Upcoming tracks in the host's queue, in play order (respects shuffle and added requests).
 // Shown to everyone in the room; the first one is pre-loaded by listeners.
@@ -145,5 +155,21 @@ export async function getQueue(limit = 10) {
   return (q?.queue ?? [])
     .filter((item) => item.type === "track")
     .slice(0, limit)
-    .map((n) => ({ id: n.id, title: n.name, artist: n.artists[0].name, album: n.album.name, durationSec: Math.round(n.duration_ms / 1000) }));
+    .map(toTrack);
 }
+
+// Host's own profile for the members list (display name + avatar; no extra scope needed).
+export async function getMe() {
+  const me = await api("/me");
+  return { name: (me?.display_name || "Host").slice(0, 40), avatar: me?.images?.[0]?.url ?? null };
+}
+
+// Playback control for the room (host's account; Premium). Used for the shared queue and guest controls.
+export const player = {
+  playTrack: (id, positionMs = 0) => api("/me/player/play", { method: "PUT", body: JSON.stringify({ uris: [`spotify:track:${id}`], position_ms: Math.max(0, Math.round(positionMs)) }) }),
+  play: () => api("/me/player/play", { method: "PUT" }),
+  pause: () => api("/me/player/pause", { method: "PUT" }),
+  next: () => api("/me/player/next", { method: "POST" }),
+  prev: () => api("/me/player/previous", { method: "POST" }),
+  seek: (ms) => api(`/me/player/seek?position_ms=${Math.max(0, Math.round(ms))}`, { method: "PUT" }),
+};

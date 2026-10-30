@@ -63,3 +63,12 @@ instead of the in-page embed. No API key: it reads YouTube's own search page to 
 The YouTube side drives the page's `<video>` element and waits out ads. The Spotify web player side clicks
 Spotify's own controls, so it is experimental and breaks if Spotify changes its markup.
 Check the search picker with `node extension/check-search.mjs`.
+
+## Spotify desktop (Spicetify)
+
+`spicetify/listen-along.js` is a [Spicetify](https://spicetify.app) extension for the same rooms. As host it
+publishes the track, position and queue straight from the desktop player (no Web API, so no 403 or
+Development Mode limits); as listener it plays the exact same track and keeps within ~2 s. The build emits
+`spicetify-listen-along.js` with the Firebase config prepended; the 🧩 Extension dialog shows the PowerShell
+command that downloads it into `%APPDATA%\spicetify\Extensions` and runs `spicetify apply`.
+Needs Spotify from spotify.com: Spicetify can't patch the Microsoft Store version.

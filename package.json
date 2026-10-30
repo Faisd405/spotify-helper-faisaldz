@@ -12,7 +12,8 @@
     "@sglkc/kuroshiro": "^1.0.1",
     "@sglkc/kuroshiro-analyzer-kuromoji": "^1.0.1",
     "firebase": "^13.1.0",
-    "pinyin-pro": "^3.29.5"
+    "pinyin-pro": "^3.29.5",
+    "qrcode": "^1.5.4"
   },
   "devDependencies": {
     "fflate": "^0.8.3",

@@ -1,6 +1,6 @@
 import { initializeApp } from "firebase/app";
 import { getAuth, signInAnonymously } from "firebase/auth";
-import { getDatabase, ref, set, get, update, push, remove, onValue, onDisconnect, serverTimestamp } from "firebase/database";
+import { getDatabase, ref, set, get, update, push, remove, onValue, onChildAdded, onDisconnect, serverTimestamp } from "firebase/database";
 
 // Name each variable explicitly: referencing import.meta.env as a whole makes Vite inline *every*
 // VITE_* variable into the bundle, including ones this app doesn't use.
@@ -18,60 +18,71 @@ let serverOffset = 0;
 onValue(ref(db, ".info/serverTimeOffset"), (s) => (serverOffset = s.val() ?? 0));
 export const serverNow = () => Date.now() + serverOffset;
 
-// Everyone signs in anonymously: the rules use the uid for host ownership, presence, requests and kicks.
+// Everyone signs in anonymously: the rules use the uid for host ownership, presence, queue, commands, kicks.
 let signedIn;
 const signIn = () => (signedIn ??= signInAnonymously(getAuth(app)).then((c) => c.user));
+export const myUid = async () => (await signIn()).uid;
+
+const slim = ({ id, title, artist, album, art, durationSec }) => ({ id, title, artist, album: album ?? "", art: art ?? null, durationSec });
 
 // ---------- Host ----------
 
-const slim = ({ id, title, artist, album, durationSec }) => ({ id, title, artist, album, durationSec });
-
 // Claims rooms/{code} for this host. Rules reject it if another host owns the code.
+// rooms/{code} = { hostUid, host: { name, avatar }, settings: { guestControl, approval }, track }
 export async function hostRoom(code) {
   const user = await signIn();
   const room = ref(db, `rooms/${code}`);
   await set(room, { hostUid: user.uid, track: null });
   onDisconnect(ref(db, `rooms/${code}/track/isPlaying`)).set(false); // listeners pause if host drops
   return {
-    publish: (t) =>
+    uid: user.uid,
+    publish: (t, { host, settings }) =>
       set(room, {
         hostUid: user.uid,
+        host,
+        settings,
         track: t && {
-          id: t.id,
-          title: t.title,
-          artist: t.artist,
-          album: t.album,
-          durationSec: t.durationSec,
+          ...slim(t),
           progressMs: t.progressMs,
           isPlaying: t.isPlaying,
           at: t.fetchedAt + serverOffset,
-          // Next song in the host's queue: listeners pre-load it and switch at the expected end.
+          // What plays next (room queue first, then Spotify): listeners pre-load it and switch at the end.
           next: t.next ? slim(t.next) : null,
-          queue: (t.queue ?? []).map(slim), // up to 10 upcoming songs, shown in every listener's room panel
+          upcoming: (t.upcoming ?? []).map(slim), // Spotify's own "up next" after the room queue
         },
       }),
     // Children first: the rules check hostUid on the room, which is gone once the room is removed.
     end: async () => {
-      await update(ref(db), { [`requests/${code}`]: null, [`listeners/${code}`]: null, [`kicked/${code}`]: null });
+      await update(ref(db), Object.fromEntries(["requests", "listeners", "kicked", "queues", "commands"].map((p) => [`${p}/${code}`, null])));
       await remove(room);
     },
   };
 }
 
-// listeners/{code}/{uid} = { name, via, at }. Entries go stale when a listener stops sending heartbeats.
-export const watchListeners = (code, onChange) => onValue(ref(db, `listeners/${code}`), (s) => onChange(s.val() ?? {}));
-
-// Kicked uids can no longer read the room, send heartbeats or request songs (enforced by the rules).
+// Kicked uids can no longer read the room, send heartbeats, edit the queue or send commands (rules).
 export const kick = (code, uid) => update(ref(db), { [`kicked/${code}/${uid}`]: true, [`listeners/${code}/${uid}`]: null });
 
 export const updateRequest = (code, id, fields) => update(ref(db, `requests/${code}/${id}`), fields);
 export const removeRequest = (code, id) => remove(ref(db, `requests/${code}/${id}`));
 
+// queues/{code}/{key} = { id, title, artist, album, art, durationSec, by, name, avatar?, order, at }
+export function addQueueItem(code, track, by, order) {
+  return push(ref(db, `queues/${code}`), { ...slim(track), by: by.uid, name: by.name, avatar: by.avatar ?? null, order, at: serverTimestamp() });
+}
+
+// Guest commands: { by, a: play|pause|next|prev|seek|playItem, pos?, key?, at }. Each is handled once.
+export function watchCommands(code, handle) {
+  return onChildAdded(ref(db, `commands/${code}`), (s) => {
+    remove(s.ref).catch(() => {});
+    handle(s.val());
+  });
+}
+
 // ---------- Listener ----------
 
-// Starts presence and follows the room. getName() is read on every heartbeat so renames show up.
-// Returns the listener's uid.
-export async function joinRoom(code, getName, { onTrack, onKicked }) {
+// Starts presence and follows the whole room (track, host, settings). getName() is read on every
+// heartbeat so renames show up. Returns the listener's uid.
+export async function joinRoom(code, getName, { onRoom, onKicked }) {
   const user = await signIn();
   const me = ref(db, `listeners/${code}/${user.uid}`);
   const beat = () => set(me, { name: getName(), via: "web", at: serverTimestamp() }).catch(() => {});
@@ -88,10 +99,11 @@ export async function joinRoom(code, getName, { onTrack, onKicked }) {
   };
   onValue(ref(db, `kicked/${code}/${user.uid}`), (s) => s.val() && stop());
   onValue(
-    ref(db, `rooms/${code}/track`),
+    ref(db, `rooms/${code}`),
     (s) => {
-      const t = s.val();
-      onTrack(t?.id ? { ...t, fetchedAt: t.at - serverOffset } : null);
+      const r = s.val() ?? {};
+      const t = r.track;
+      onRoom({ ...r, track: t?.id ? { ...t, fetchedAt: t.at - serverOffset } : null });
     },
     stop, // permission denied: we were kicked
   );
@@ -103,10 +115,22 @@ export async function requestSong(code, name, text) {
   return push(ref(db, `requests/${code}`), { by: user.uid, name, text, at: serverTimestamp() });
 }
 
+export async function sendCommand(code, a, extra = {}) {
+  const user = await signIn();
+  return push(ref(db, `commands/${code}`), { by: user.uid, a, ...extra, at: serverTimestamp() });
+}
+
 // ---------- Both ----------
 
-// requests/{code}/{id} = { by, name, text, at, track?: { id, title, artist }, status?: "queued" | "notfound" }
-export const watchRequests = (code, onChange) => onValue(ref(db, `requests/${code}`), (s) => onChange(s.val() ?? {}));
+const watch = (path) => (code, onChange) => onValue(ref(db, `${path}/${code}`), (s) => onChange(s.val() ?? {}), () => {});
+// listeners/{code}/{uid} = { name, via, avatar?, at }. Entries go stale when heartbeats stop.
+export const watchListeners = watch("listeners");
+// requests/{code}/{id} = { by, name, text, at, track?: { id, title, artist, art }, status?: "notfound" }
+export const watchRequests = watch("requests");
+export const watchQueue = watch("queues");
+
+export const removeQueueItem = (code, key) => remove(ref(db, `queues/${code}/${key}`));
+export const setQueueOrder = (code, key, order) => set(ref(db, `queues/${code}/${key}/order`), order);
 
 // ---------- Shared lyrics cache ----------
 
