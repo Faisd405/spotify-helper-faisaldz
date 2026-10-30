@@ -25,7 +25,8 @@ async function spicetifyFile(env) {
     siteUrl: env.VITE_SITE_URL ?? "https://spotify-helper-faisaldz.vercel.app/",
   };
   const code = ["listen-along.js", "romaji-lyrics.js"].map((f) => fs.readFileSync(`spicetify/${f}`, "utf8")).join("\n");
-  return `${await libsIife()}\nglobalThis.LISTEN_ALONG_CONFIG = ${JSON.stringify(config)};\n${code}`;
+  // A library failing to load must not take the rooms down with it (QR and lyrics just go missing).
+  return `try {\n${await libsIife()}\n} catch (e) { console.error("[Listen Along] libraries", e); globalThis.LA_LIBS_ERROR = String(e?.stack ?? e); }\nglobalThis.LISTEN_ALONG_CONFIG = ${JSON.stringify(config)};\n${code}`;
 }
 const SKIP = new Set(["config.js", "config.example.js", "check-search.mjs"]);
 

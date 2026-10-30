@@ -42,9 +42,17 @@ function getKuroshiro() {
   return kuroshiro;
 }
 
+// kuroshiro's spaced mode splits a word at a token-final っ: だった -> "datsu ta". Join those back
+// ("datta", っち -> "tchi"). Only in lines that have a small tsu, at most once per small tsu.
+// ponytail: a real つ-ending word before a consonant in such a line (いつ まで + だった) could be joined too.
+export function fixSokuon(roman, text) {
+  let n = (text.match(/[っッ]/g) ?? []).length;
+  return roman.replace(/tsu ([bcdfghjkmnpqrstvwxyz])/g, (m, c) => (n-- > 0 ? (c === "c" ? "tc" : c + c) : m));
+}
+
 export async function romanize(text, lang) {
   if (lang === "ja" && (KANA.test(text) || HAN.test(text))) {
-    return (await getKuroshiro()).convert(text, { to: "romaji", mode: "spaced", romajiSystem: "hepburn" });
+    return fixSokuon(await (await getKuroshiro()).convert(text, { to: "romaji", mode: "spaced", romajiSystem: "hepburn" }), text);
   }
   // @romanize/korean throws on anything outside Hangul/ASCII (e.g. "…", "’"), so feed it Hangul runs only.
   if (lang === "ko" && HANGUL.test(text)) return text.replace(/[가-힯ᄀ-ᇿ㄰-㆏]+/g, (run) => romanizeKorean(run));

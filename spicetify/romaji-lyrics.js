@@ -1,7 +1,7 @@
 // Spicetify: full-page romaji lyrics in the style of lyrics-plus, but with the original line under the romaji
 // (or romaja / pinyin), and the same display settings as the web app.
 // Sources, in order: this device, the room's shared Firebase cache, Spotify's own lyrics (Musixmatch data,
-// as lyrics-plus does), LRCLIB, then Genius (not synced). Synced lyrics are shared back to the Firebase cache
+// as lyrics-plus does), LRCLIB, then unsynced: LRCLIB plain text, Genius. Synced lyrics are shared back to the Firebase cache
 // so web listeners get them without the 12 MB Japanese dictionary.
 // Needs LA_LYRICS + LISTEN_ALONG_CONFIG (prepended by the build) and listen-along.js for saving.
 
@@ -41,6 +41,13 @@
       const lines = await L.fetchLyrics(t);
       return lines?.length ? { synced: true, lines } : null;
     },
+    // Unsynced fallback, e.g. songs LRCLIB only has as plain text.
+    "LRCLIB (teks)": async (t) => {
+      const hits = await (await fetch(`https://lrclib.net/api/search?${new URLSearchParams({ track_name: t.title, artist_name: t.artist })}`)).json();
+      const plain = hits.find((x) => x.plainLyrics)?.plainLyrics;
+      return plain ? { synced: false, lines: plain.split(/\r?\n/).map((text) => ({ timeMs: 0, text: text.trim() })) } : null;
+    },
+    // Often blocked: genius.com answers 403 to non-browser clients (Oct 2026), and so fails in lyrics-plus too.
     Genius: async (t) => {
       const q = new URLSearchParams({ per_page: 10, q: `${t.artist} ${t.title.replace(/\s*[([-].*$/, "")}` });
       const hits = (await Spicetify.CosmosAsync.get(`https://genius.com/api/search/song?${q}`))?.response?.sections?.[0]?.hits ?? [];
@@ -73,17 +80,21 @@
     }
   }
 
+  // Caches are write-once and may predate the small-tsu fix (だった -> "datsu ta"): apply it on read too.
+  const fixCached = (res) => { for (const l of res.lines) l.roman = L.fixSokuon(l.roman ?? "", l.text); return res; };
+
   // Tries ORDER from index `from`; -1 = this device first. Returns { source, synced, lines, noRoman }.
   async function load(t, say, from = -1) {
     if (from < 0) {
       const saved = JSON.parse(localStorage.getItem(KEY(t.id)) ?? "null");
-      if (saved) return saved;
+      if (saved) return fixCached(saved);
     }
     for (const source of ORDER.slice(Math.max(from, 0))) {
       say(`Mencari lirik (${source})…`);
       const found = await SOURCES[source](t).catch((e) => (console.warn("[lyrics]", source, e), null));
       if (!found) continue;
       const res = { source, synced: found.synced, lines: found.lines, noRoman: false };
+      if (found.romanized) fixCached(res);
       if (!found.romanized) {
         const lang = L.detectLang(res.lines.map((l) => l.text).join("\n"));
         if (lang === "ja") say("Memuat kamus Jepang (pertama kali agak lama)…");
@@ -112,7 +123,7 @@
 
   // ---------- Settings (same set as the web app's ⚙) ----------
 
-  const DEFAULTS = { romanSize: 2, origSize: 1.1, showOrig: true, active: "#1db954", text: "#ffffff", offset: 0, align: "left" };
+  const DEFAULTS = { romanSize: 2, origSize: 1.1, showOrig: true, active: "#1db954", text: "#ffffff", offset: 0, align: "left", themeBg: true, bg: "#121212" };
   let opts = { ...DEFAULTS, ...JSON.parse(store.get("la:lyrics-style") ?? "{}") };
   function applyOpts() {
     if (!page) return;
@@ -122,6 +133,7 @@
     s.setProperty("--lr-active", opts.active);
     s.setProperty("--lr-text", opts.text);
     s.setProperty("--lr-align", opts.align);
+    s.setProperty("--lr-bg", opts.themeBg ? "var(--spice-main, #121212)" : opts.bg);
     page.classList.toggle("lr-no-orig", !opts.showOrig);
   }
 
@@ -133,7 +145,7 @@
     return e;
   };
   document.head.append(h("style", { textContent: `
-    .lr-page { position: absolute; inset: 0; z-index: 20; display: flex; flex-direction: column; background: var(--spice-main, #121212); color: var(--lr-text); }
+    .lr-page { position: fixed; z-index: 20; border-radius: 8px; overflow: hidden; display: flex; flex-direction: column; background: var(--lr-bg); color: var(--lr-text); }
     .lr-head { display: flex; align-items: center; gap: 8px; padding: 12px 24px; border-bottom: 1px solid rgba(var(--spice-rgb-text, 255,255,255), .1); }
     .lr-title { flex: 1; min-width: 0; }
     .lr-title b, .lr-title small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -168,7 +180,11 @@
     const save = () => { store.set("la:lyrics-style", JSON.stringify(opts)); applyOpts(); };
     const input = (label, key, attrs) => {
       const i = h("input", { ...attrs, [attrs.type === "checkbox" ? "checked" : "value"]: opts[key] });
-      i.oninput = () => { opts[key] = attrs.type === "checkbox" ? i.checked : attrs.type === "color" ? i.value : Number(i.value); save(); };
+      i.oninput = () => {
+        opts[key] = attrs.type === "checkbox" ? i.checked : attrs.type === "color" ? i.value : Number(i.value);
+        if (key === "bg") { opts.themeBg = false; page.querySelector(".lr-theme-bg").checked = false; } // picking a colour means using it
+        save();
+      };
       return h("label", { className: attrs.type === "checkbox" ? "row" : "" }, ...(attrs.type === "checkbox" ? [i, ` ${label}`] : [label, i]));
     };
     const align = h("select", {}, h("option", { value: "left", textContent: "Kiri" }), h("option", { value: "center", textContent: "Tengah" }));
@@ -179,17 +195,17 @@
       input("Ukuran teks asli", "origSize", { type: "range", min: 0.6, max: 3, step: 0.1 }),
       input("Warna baris aktif", "active", { type: "color" }),
       input("Warna teks", "text", { type: "color" }),
+      input("Warna latar", "bg", { type: "color" }),
       input("Offset sinkron (ms, lebih besar = lebih awal)", "offset", { type: "number", step: 50 }),
       h("label", {}, "Rata", align),
       input("Tampilkan teks asli", "showOrig", { type: "checkbox" }),
+      input("Latar ikut tema Spotify", "themeBg", { type: "checkbox", className: "lr-theme-bg" }),
       h("label", { className: "row" }, h("button", { type: "button", textContent: "Reset", onclick: () => { opts = { ...DEFAULTS }; save(); const o = optsPanel(); o.hidden = false; page.querySelector(".lr-opts").replaceWith(o); } })),
     );
   }
 
   function open() {
     if (page) return;
-    const host = document.querySelector(".Root__main-view") ?? document.body;
-    if (getComputedStyle(host).position === "static") host.style.position = "relative";
     page = h("div", { className: "lr-page" },
       h("div", { className: "lr-head" },
         h("div", { className: "lr-title" }, h("b"), h("small")),
@@ -202,14 +218,28 @@
     );
     const scroller = page.querySelector(".lr-scroll");
     for (const ev of ["wheel", "touchmove", "keydown"]) scroller.addEventListener(ev, () => (userScrolledAt = Date.now()), { passive: true });
-    host.append(page);
+    document.body.append(page);
+    place();
+    placeTimer = setInterval(place, 500); // follows sidebar / window resizes
     applyOpts();
     btn.active = true;
     shownId = null;
     show();
     requestAnimationFrame(tick);
   }
+  // A fixed overlay over Spotify's main view: appending inside it would put our node in React's tree, and
+  // the class names there change between Spotify versions.
+  let placeTimer;
+  function place() {
+    const r = document.querySelector("#main-view, .main-view-container, .Root__main-view")?.getBoundingClientRect();
+    const box = r?.width ? { top: r.top, left: r.left, width: r.width, height: r.height } : { top: 0, left: 0, width: innerWidth, height: innerHeight - 90 }; // 90: playbar
+    // Stop where the Listen Along panel starts, so it doesn't cover the lyrics or the close button.
+    const panel = document.querySelector("#la-panel:not(.la-hidden)")?.getBoundingClientRect();
+    if (panel?.width && panel.left < box.left + box.width) box.width = Math.max(320, panel.left - 8 - box.left);
+    Object.assign(page.style, { top: `${box.top}px`, left: `${box.left}px`, width: `${box.width}px`, height: `${box.height}px` });
+  }
   function close() {
+    clearInterval(placeTimer);
     page?.remove();
     page = null;
     btn.active = false;

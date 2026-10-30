@@ -82,4 +82,4 @@ Needs Spotify from spotify.com: Spicetify can't patch the Microsoft Store versio
 The same file adds **Lirik Romaji** (`spicetify/romaji-lyrics.js`, button in the playbar): a full-page lyrics view
 with romaji / romaja / pinyin above the original line, the web app's display settings (sizes, colours, offset,
 show original, alignment), click a line to seek. Sources: this device, the shared Firebase cache, Spotify's own
-lyrics, LRCLIB, Genius (not synced); "Sumber lain" tries the next one. Synced lyrics go back to the shared cache.
+lyrics, LRCLIB, then unsynced LRCLIB text and Genius (often blocked by genius.com); "Sumber lain" tries the next one. Synced lyrics go back to the shared cache.

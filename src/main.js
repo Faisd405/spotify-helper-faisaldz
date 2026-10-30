@@ -1,6 +1,6 @@
 import { login, logout, handleRedirect, isLoggedIn, getNowPlaying, getQueue, getMe, player, isRateLimited, resolveTrack } from "./spotify.js";
 import { fetchLyrics } from "./lyrics.js";
-import { romanize, detectLang } from "./romanize.js";
+import { romanize, detectLang, fixSokuon } from "./romanize.js";
 import { avatar, renderNowPlaying, renderMembers, renderQueue, renderPending, renderUpcoming, renderQR } from "./panel.js";
 
 const $ = (s) => document.querySelector(s);
@@ -558,6 +558,8 @@ async function loadLyrics(t, say) {
     lines = await fb.getSharedLyrics(t.id, room ? 0 : 8000);
     if (lines) cacheLyrics(t.id, lines);
   }
+  // Caches are write-once and may predate the small-tsu fix: apply it on read too.
+  if (lines) for (const l of lines) l.roman = fixSokuon(l.roman ?? "", l.text);
   let noRomaji = false;
   if (!lines) {
     say("Mencari lirik…");
