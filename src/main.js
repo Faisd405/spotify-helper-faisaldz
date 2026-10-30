@@ -59,6 +59,10 @@ $("#spice-copy").onclick = async () => {
   await navigator.clipboard.writeText($("#spice-cmd").textContent);
   $("#spice-copy").textContent = "Tersalin";
 };
+$("#spicetify-copy").onclick = async () => {
+  await navigator.clipboard.writeText($("#spicetify-cmd").textContent);
+  $("#spicetify-copy").textContent = "Tersalin";
+};
 $("#ext-copy").onclick = async () => {
   await navigator.clipboard.writeText("chrome://extensions");
   $("#ext-copy").textContent = "Tersalin";

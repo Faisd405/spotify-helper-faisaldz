@@ -261,9 +261,14 @@
     <p>Host atau ikut room langsung dari app Spotify desktop: lagu yang sama persis, tanpa batas Web API. Butuh
       <a href="https://spicetify.app" target="_blank" rel="noopener">Spicetify</a> dan Spotify dari spotify.com (versi Microsoft Store tidak didukung).</p>
     <ol>
-      <li>Jalankan di PowerShell <button id="spice-copy" class="small" type="button">Salin</button>
+      <li>Belum punya Spicetify? Buka PowerShell biasa (<b>bukan</b> Run as administrator), lalu jalankan
+        <button id="spicetify-copy" class="small" type="button">Salin</button>
+        <pre id="spicetify-cmd">iwr -useb https://raw.githubusercontent.com/spicetify/cli/main/install.ps1 | iex</pre>
+        <small>Perintah resmi dari spicetify.app. Kalau ditanya soal Marketplace, boleh pilih apa saja.</small></li>
+      <li>Pasang Listen Along: jalankan di PowerShell <button id="spice-copy" class="small" type="button">Salin</button>
         <pre id="spice-cmd"></pre></li>
-      <li>Buka Spotify, klik ikon <b>Listen Along</b> di bar atas, lalu buat room atau masukkan kode room.</li>
+      <li>Spotify terbuka ulang. Klik ikon <b>Listen Along</b> di bar atas untuk buat room atau masukkan kode room.
+        Lirik romaji: ikon <b>Lirik Romaji</b> (tiga garis + あ) di kanan bawah playbar.</li>
     </ol>
     <p>Spotify update? Jalankan <code>spicetify backup apply</code>.</p>
     <form method="dialog"><button>Tutup</button></form>
