@@ -33,6 +33,8 @@ var (
 	errNoDevice = errors.New("tidak ada Spotify yang terbuka")
 	errPremium  = errors.New("butuh Spotify Premium")
 	errLogin    = errors.New("belum login Spotify")
+	// Development Mode apps only serve accounts listed under User Management (plain-text 403).
+	errNotRegistered = errors.New("akun Spotify ini belum didaftarkan di User Management (Developer Dashboard)")
 )
 
 type rateLimited struct{ wait time.Duration }
@@ -205,9 +207,22 @@ func (s *Spotify) api(method, path string, body any) (int, []byte, error) {
 			return 429, nil, rateLimited{time.Duration(max(sec, 5)) * time.Second}
 		case res.StatusCode == 403 && strings.Contains(string(data), "PREMIUM_REQUIRED"):
 			return 403, data, errPremium
+		case res.StatusCode == 403 && strings.Contains(string(data), "not registered"):
+			return 403, data, errNotRegistered
 		}
 		return res.StatusCode, data, nil
 	}
+}
+
+// reason is Spotify's error message, e.g. "Player command failed: Restriction violated".
+func reason(data []byte) string {
+	var e struct {
+		Error struct{ Message, Reason string }
+	}
+	if json.Unmarshal(data, &e) != nil {
+		return strings.TrimSpace(string(data[:min(len(data), 150)]))
+	}
+	return strings.TrimSpace(e.Error.Message + " " + e.Error.Reason)
 }
 
 type Player struct {
@@ -229,14 +244,14 @@ func (s *Spotify) player() (*Player, error) {
 // play starts the track at posMs. With no active Spotify it picks an open one (PC first).
 func (s *Spotify) play(id string, posMs int) error {
 	body := map[string]any{"uris": []string{"spotify:track:" + id}, "position_ms": max(posMs, 0)}
-	status, _, err := s.api("PUT", "/me/player/play", body)
+	status, data, err := s.api("PUT", "/me/player/play", body)
 	if err != nil || status < 300 {
 		return err
 	}
 	if status != 404 {
-		return fmt.Errorf("play HTTP %d", status)
+		return fmt.Errorf("play HTTP %d %s", status, reason(data))
 	}
-	_, data, err := s.api("GET", "/me/player/devices", nil)
+	_, data, err = s.api("GET", "/me/player/devices", nil)
 	if err != nil {
 		return err
 	}
@@ -256,9 +271,9 @@ func (s *Spotify) play(id string, posMs int) error {
 	if device == "" {
 		return errNoDevice
 	}
-	status, _, err = s.api("PUT", "/me/player/play?device_id="+device, body)
+	status, data, err = s.api("PUT", "/me/player/play?device_id="+device, body)
 	if err == nil && status >= 300 {
-		err = fmt.Errorf("play HTTP %d", status)
+		err = fmt.Errorf("play HTTP %d %s", status, reason(data))
 	}
 	return err
 }

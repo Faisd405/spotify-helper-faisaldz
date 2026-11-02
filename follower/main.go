@@ -35,19 +35,21 @@ var clientID, dbURL, apiKey string
 var httpClient = &http.Client{Timeout: 15 * time.Second}
 
 type App struct {
-	dir       string
-	fb        *Firebase
-	sp        *Spotify
-	mu        sync.Mutex
-	room      string
-	following bool
-	track     *Track
-	status    string
-	name      string
-	stop      context.CancelFunc
-	wake      chan struct{}
-	mStatus   *systray.MenuItem
-	mFollow   *systray.MenuItem
+	dir         string
+	fb          *Firebase
+	sp          *Spotify
+	mu          sync.Mutex
+	room        string
+	following   bool
+	track       *Track
+	status      string
+	name        string
+	sameAccount bool
+	checked     bool // account compared with the host at least once: no commands before that
+	stop        context.CancelFunc
+	wake        chan struct{}
+	mStatus     *systray.MenuItem
+	mFollow     *systray.MenuItem
 }
 
 func main() {
@@ -212,7 +214,7 @@ func (a *App) join(code string) {
 	a.leave("")
 	ctx, cancel := context.WithCancel(context.Background())
 	a.mu.Lock()
-	a.room, a.stop, a.track = code, cancel, nil
+	a.room, a.stop, a.track, a.checked = code, cancel, nil, false
 	a.mu.Unlock()
 	writeJSON(filepath.Join(a.dir, "config.json"), map[string]string{"Room": code})
 	a.setStatus("Gabung ke room " + code + "…")
@@ -265,6 +267,14 @@ func (a *App) streamLoop(ctx context.Context, code string) {
 
 func (a *App) presenceLoop(ctx context.Context, code string) {
 	for {
+		// The host's own account can't follow: one Spotify account plays on one device at a time, so we'd
+		// only be driving the host's player. Compared by display name (the room stores no Spotify user id).
+		var host string
+		a.fb.do("GET", "rooms/"+code+"/host/name", nil, &host)
+		same := host != "" && a.sp.hasLogin() && strings.EqualFold(host, a.displayName())
+		a.mu.Lock()
+		a.sameAccount, a.checked = same, true
+		a.mu.Unlock()
 		if err := a.fb.heartbeat(code, a.displayName()); err == errKicked {
 			a.leave("Anda di-kick dari room " + code)
 			return
@@ -286,6 +296,7 @@ func (a *App) syncLoop(ctx context.Context) {
 	var appliedPlaying bool
 	var lastCmd, lastSeek, lastCheck, holdUntil time.Time
 	var aligned *Track // the room state Spotify was last lined up with
+	var nilSince time.Time
 	// ms between sending a command and Spotify actually playing there. Learned from the first drift check
 	// after each of our play/seek commands (calibrate).
 	lead, calibrate := 400.0, false
@@ -299,8 +310,16 @@ func (a *App) syncLoop(ctx context.Context) {
 		case <-a.wake:
 		}
 		a.mu.Lock()
-		t, following := a.track, a.following
+		t, following, same, checked := a.track, a.following, a.sameAccount, a.checked
 		a.mu.Unlock()
+		if !checked {
+			continue
+		}
+		if same {
+			appliedID = ""
+			a.setStatus("Akun Spotify ini = akun host. Satu akun hanya bisa memutar di satu perangkat: login dengan akun Premium lain")
+			continue
+		}
 		if !following {
 			appliedID = "" // re-apply everything when following resumes
 			continue
@@ -318,6 +337,8 @@ func (a *App) syncLoop(ctx context.Context) {
 			switch err {
 			case errNoDevice:
 				a.setStatus("Buka Spotify (PC atau HP) dulu")
+			case errNotRegistered:
+				a.setFollowing(false, "Akun ini belum terdaftar di Developer Dashboard (User Management)")
 			case errLogin:
 				a.setStatus("Belum login Spotify: klik \"Login Spotify\" di menu")
 			case errPremium:
@@ -327,6 +348,13 @@ func (a *App) syncLoop(ctx context.Context) {
 			}
 		}
 		if t == nil {
+			// Hosts briefly publish no track while Spotify switches songs: only pause if it stays empty.
+			if nilSince.IsZero() {
+				nilSince = time.Now()
+			}
+			if time.Since(nilSince) < 3*time.Second {
+				continue
+			}
 			if appliedPlaying {
 				a.sp.pause()
 				appliedPlaying = false
@@ -335,6 +363,7 @@ func (a *App) syncLoop(ctx context.Context) {
 			a.setStatus("Menunggu host memutar lagu")
 			continue
 		}
+		nilSince = time.Time{}
 		if t.ID != appliedID || t.IsPlaying != appliedPlaying {
 			var err error
 			if t.ID != appliedID || t.IsPlaying {
