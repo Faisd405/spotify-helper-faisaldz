@@ -16,9 +16,11 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -30,6 +32,7 @@ const (
 var (
 	errNoDevice = errors.New("tidak ada Spotify yang terbuka")
 	errPremium  = errors.New("butuh Spotify Premium")
+	errLogin    = errors.New("belum login Spotify")
 )
 
 type rateLimited struct{ wait time.Duration }
@@ -46,6 +49,7 @@ type Spotify struct {
 	dry            bool // test mode: no Spotify at all, commands are logged and simulated
 	mu             sync.Mutex
 	tok            *spToken
+	loggingIn      atomic.Bool
 	sim            struct {
 		id      string
 		pos     float64
@@ -54,6 +58,7 @@ type Spotify struct {
 	}
 }
 
+// token never opens the browser: a login is started from the tray menu (and once on the first start).
 func (s *Spotify) token() (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -61,19 +66,32 @@ func (s *Spotify) token() (string, error) {
 		readJSON(s.file, &s.tok)
 	}
 	if s.tok == nil {
-		if err := s.login(); err != nil {
-			return "", err
-		}
+		return "", errLogin
 	}
 	if time.Until(s.tok.ExpiresAt) < time.Minute {
-		if err := s.exchange(url.Values{"grant_type": {"refresh_token"}, "refresh_token": {s.tok.Refresh}}); err != nil {
-			s.tok = nil // revoked or expired: log in again
-			if err := s.login(); err != nil {
-				return "", err
-			}
+		next, err := s.fetchToken(url.Values{"grant_type": {"refresh_token"}, "refresh_token": {s.tok.Refresh}})
+		if err != nil {
+			s.tok = nil // revoked or expired: needs a new login
+			os.Remove(s.file)
+			return "", errLogin
 		}
+		s.store(next)
 	}
 	return s.tok.Access, nil
+}
+
+func (s *Spotify) hasLogin() bool {
+	_, err := s.token()
+	return err == nil
+}
+
+// store keeps the refresh token when a refresh doesn't return a new one. Caller holds s.mu.
+func (s *Spotify) store(next *spToken) {
+	if next.Refresh == "" && s.tok != nil {
+		next.Refresh = s.tok.Refresh
+	}
+	s.tok = next
+	writeJSON(s.file, next)
 }
 
 func randString(n int) string {
@@ -82,8 +100,13 @@ func randString(n int) string {
 	return base64.RawURLEncoding.EncodeToString(b)[:n]
 }
 
-// login opens the browser for the Spotify consent page and waits for the redirect on 127.0.0.1.
+// login opens the browser for the Spotify consent page and waits (up to 10 min) for the redirect on
+// 127.0.0.1. It doesn't hold s.mu while waiting, so following and presence keep running.
 func (s *Spotify) login() error {
+	if !s.loggingIn.CompareAndSwap(false, true) {
+		return errors.New("login sudah dibuka di browser")
+	}
+	defer s.loggingIn.Store(false)
 	verifier, state := randString(64), randString(16)
 	sum := sha256.Sum256([]byte(verifier))
 	ln, err := net.Listen("tcp", "127.0.0.1:47823")
@@ -121,13 +144,20 @@ func (s *Spotify) login() error {
 		if code == "" {
 			return errors.New("login Spotify dibatalkan")
 		}
-		return s.exchange(url.Values{"grant_type": {"authorization_code"}, "code": {code}, "redirect_uri": {redirectURI}, "code_verifier": {verifier}})
-	case <-time.After(5 * time.Minute):
+		next, err := s.fetchToken(url.Values{"grant_type": {"authorization_code"}, "code": {code}, "redirect_uri": {redirectURI}, "code_verifier": {verifier}})
+		if err != nil {
+			return err
+		}
+		s.mu.Lock()
+		s.store(next)
+		s.mu.Unlock()
+		return nil
+	case <-time.After(10 * time.Minute):
 		return errors.New("login Spotify tidak diselesaikan")
 	}
 }
 
-func (s *Spotify) exchange(form url.Values) error {
+func (s *Spotify) fetchToken(form url.Values) (*spToken, error) {
 	form.Set("client_id", s.clientID)
 	var r struct {
 		AccessToken  string `json:"access_token"`
@@ -135,15 +165,9 @@ func (s *Spotify) exchange(form url.Values) error {
 		ExpiresIn    int    `json:"expires_in"`
 	}
 	if err := postForm("https://accounts.spotify.com/api/token", form, &r); err != nil || r.AccessToken == "" {
-		return fmt.Errorf("token Spotify gagal: %v", err)
+		return nil, fmt.Errorf("token Spotify gagal: %v", err)
 	}
-	next := &spToken{r.AccessToken, r.RefreshToken, time.Now().Add(time.Duration(r.ExpiresIn) * time.Second)}
-	if next.Refresh == "" && s.tok != nil {
-		next.Refresh = s.tok.Refresh
-	}
-	s.tok = next
-	writeJSON(s.file, next)
-	return nil
+	return &spToken{r.AccessToken, r.RefreshToken, time.Now().Add(time.Duration(r.ExpiresIn) * time.Second)}, nil
 }
 
 func (s *Spotify) api(method, path string, body any) (int, []byte, error) {
@@ -171,7 +195,9 @@ func (s *Spotify) api(method, path string, body any) (int, []byte, error) {
 		switch {
 		case res.StatusCode == 401 && attempt == 0:
 			s.mu.Lock()
-			s.tok.ExpiresAt = time.Time{} // force a refresh
+			if s.tok != nil {
+				s.tok.ExpiresAt = time.Time{} // force a refresh
+			}
 			s.mu.Unlock()
 			continue
 		case res.StatusCode == 429:

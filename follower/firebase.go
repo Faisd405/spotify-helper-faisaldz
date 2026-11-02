@@ -100,7 +100,7 @@ func (f *Firebase) do(method, path string, body any, out any) (int, error) {
 	req, _ := http.NewRequest(method, fmt.Sprintf("%s/%s.json?auth=%s", f.dbURL, path, a.IDToken), rd)
 	res, err := httpClient.Do(req)
 	if err != nil {
-		return 0, err
+		return 0, redact(err)
 	}
 	defer res.Body.Close()
 	if out != nil {
@@ -149,7 +149,7 @@ func (f *Firebase) stream(ctx context.Context, code string, onEvent func(event, 
 	req.Header.Set("Accept", "text/event-stream")
 	res, err := http.DefaultClient.Do(req) // no timeout: the stream stays open
 	if err != nil {
-		return err
+		return redact(err)
 	}
 	defer res.Body.Close()
 	if res.StatusCode == 401 {
@@ -187,9 +187,18 @@ func (f *Firebase) stream(ctx context.Context, code string, onEvent func(event, 
 		}
 	}
 	if sc.Err() != nil {
-		return sc.Err()
+		return redact(sc.Err())
 	}
 	return io.ErrUnexpectedEOF
+}
+
+// redact drops the URL (it carries ?auth=<token>) from net/http errors before they reach the log.
+func redact(err error) error {
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		return fmt.Errorf("%s %s: %w", ue.Op, strings.SplitN(ue.URL, "?", 2)[0], ue.Err)
+	}
+	return err
 }
 
 // Track is the part of rooms/{code}/track the follower needs.

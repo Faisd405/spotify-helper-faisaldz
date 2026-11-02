@@ -43,6 +43,7 @@ type App struct {
 	following bool
 	track     *Track
 	status    string
+	name      string
 	stop      context.CancelFunc
 	wake      chan struct{}
 	mStatus   *systray.MenuItem
@@ -83,12 +84,18 @@ func (a *App) onReady(room string) {
 	mJoin := systray.AddMenuItem("Gabung room dari clipboard", "Salin kode atau link room dulu, lalu klik ini")
 	a.mFollow = systray.AddMenuItemCheckbox("Ikuti", "Hilangkan centang untuk memakai Spotify sendiri", true)
 	mLeave := systray.AddMenuItem("Keluar room", "")
+	mLogin := systray.AddMenuItem("Login Spotify", "Buka login Spotify di browser")
 	systray.AddSeparator()
 	mQuit := systray.AddMenuItem("Tutup aplikasi", "")
 	if clientID == "" || dbURL == "" || apiKey == "" {
 		a.setStatus("Config kosong: build ulang dengan build.sh")
-	} else if room != "" {
-		go a.join(room)
+	} else {
+		if !a.sp.dry && !a.sp.hasLogin() {
+			go a.login() // first start: needed before anything can follow
+		}
+		if room != "" {
+			go a.join(room)
+		}
 	}
 	go func() {
 		for {
@@ -102,6 +109,8 @@ func (a *App) onReady(room string) {
 				}
 			case <-a.mFollow.ClickedCh:
 				a.setFollowing(!a.mFollow.Checked(), "")
+			case <-mLogin.ClickedCh:
+				go a.login()
 			case <-mLeave.ClickedCh:
 				a.leave("Keluar dari room")
 			case <-mQuit.ClickedCh:
@@ -158,6 +167,38 @@ func (a *App) setFollowing(on bool, why string) {
 		a.setStatus(why)
 	}
 	a.poke()
+}
+
+func (a *App) login() {
+	a.setStatus("Login Spotify di browser… (batas 10 menit)")
+	if err := a.sp.login(); err != nil {
+		a.setStatus("Login Spotify gagal: " + err.Error())
+		return
+	}
+	a.setStatus("Login Spotify berhasil")
+	a.mu.Lock()
+	a.name = "" // look the display name up again
+	a.mu.Unlock()
+	a.poke()
+}
+
+// displayName is the Spotify name shown in the room (looked up once per login).
+func (a *App) displayName() string {
+	a.mu.Lock()
+	name := a.name
+	a.mu.Unlock()
+	if name != "" {
+		return name
+	}
+	if !a.sp.dry && !a.sp.hasLogin() {
+		return "Pendengar (App)"
+	}
+	r := []rune(a.sp.displayName())
+	name = string(r[:min(len(r), 40)])
+	a.mu.Lock()
+	a.name = name
+	a.mu.Unlock()
+	return name
 }
 
 func (a *App) poke() {
@@ -223,10 +264,8 @@ func (a *App) streamLoop(ctx context.Context, code string) {
 }
 
 func (a *App) presenceLoop(ctx context.Context, code string) {
-	name := []rune(a.sp.displayName()) // also triggers the Spotify login on first use
-	name = name[:min(len(name), 40)]
 	for {
-		if err := a.fb.heartbeat(code, string(name)); err == errKicked {
+		if err := a.fb.heartbeat(code, a.displayName()); err == errKicked {
 			a.leave("Anda di-kick dari room " + code)
 			return
 		} else if err != nil {
@@ -279,6 +318,8 @@ func (a *App) syncLoop(ctx context.Context) {
 			switch err {
 			case errNoDevice:
 				a.setStatus("Buka Spotify (PC atau HP) dulu")
+			case errLogin:
+				a.setStatus("Belum login Spotify: klik \"Login Spotify\" di menu")
 			case errPremium:
 				a.setFollowing(false, "Mengikuti butuh Spotify Premium")
 			default:
