@@ -83,3 +83,19 @@ The same file adds **Lirik Romaji** (`spicetify/romaji-lyrics.js`, button in the
 with romaji / romaja / pinyin above the original line, the web app's display settings (sizes, colours, offset,
 show original, alignment), click a line to seek. Sources: this device, the shared Firebase cache, Spotify's own
 lyrics, LRCLIB, then unsynced LRCLIB text and Genius (often blocked by genius.com); "Sumber lain" tries the next one. Synced lyrics go back to the shared cache.
+
+## Follower app (Windows tray, `follower/`)
+
+A tiny Go tray app (~7 MB exe, no window) that makes your own Spotify, on the PC or the phone via Spotify
+Connect, follow a room. It only follows: no queue, requests or room controls. Untick **Ikuti**, or just play
+something else, and Spotify is yours again. It controls Spotify through the Web API, so it needs **Spotify
+Premium**, and the account must be added under User Management in the Developer Dashboard (same app as the web).
+
+- Build: `follower/build.sh` (needs Go; bakes in the public config from `.env`).
+- Dashboard: add the redirect URI `http://127.0.0.1:47823/callback`.
+- Use: copy a room code or invite link, then tray icon → **Gabung room dari clipboard**. The first time, the
+  browser opens for the Spotify login. The room is remembered for the next start.
+- Sync: song changes, play/pause and host seeks are followed right away; every 4 s it checks Spotify's
+  position and seeks if it is more than 1.2 s off (expect roughly ±0.3–1 s).
+- Test without Spotify: `ListenAlong.exe -dry CODE` logs the commands instead of sending them.
+- Log and saved logins: `%APPDATA%\ListenAlongApp`.

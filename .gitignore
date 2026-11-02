@@ -2,3 +2,6 @@ node_modules
 dist
 .env
 extension/config.js
+
+# Listen Along follower app build output
+follower/ListenAlong.exe
