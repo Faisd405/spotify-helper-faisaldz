@@ -9,7 +9,8 @@
 (async function listenAlong() {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   // Player.data stays undefined until something has played, so don't wait for it (the button would never show).
-  while (!globalThis.Spicetify?.Player?.playUri || !Spicetify.Topbar?.Button || !Spicetify.LocalStorage || !Spicetify.GraphQL?.Request) await sleep(300);
+  // GraphQL can take minutes to appear after Spotify starts, so it's awaited where it's used, not here.
+  while (!globalThis.Spicetify?.Player?.playUri || !Spicetify.Topbar?.Button || !Spicetify.LocalStorage) await sleep(300);
   const notify = (msg, isError) => Spicetify.showNotification?.(msg, isError); // loads later than the rest
 
   const CFG = globalThis.LISTEN_ALONG_CONFIG;
@@ -100,7 +101,10 @@
   // Song lookup through Spotify's own GraphQL (what the app's search uses). The public Web API through
   // CosmosAsync answers 429 for desktop clients now. Queries need exact variables: found by trial,
   // so this can break when Spotify changes them.
-  const gql = (name, vars) => Spicetify.GraphQL.Request(Spicetify.GraphQL.Definitions[name], vars);
+  const gql = async (name, vars) => {
+    while (!Spicetify.GraphQL?.Request) await sleep(300);
+    return Spicetify.GraphQL.Request(Spicetify.GraphQL.Definitions[name], vars);
+  };
   async function gqlSearch(term) {
     const r = await gql("searchModalResults", { searchTerm: term, offset: 0, limit: 10, numberOfTopResults: 10, includeAuthors: false });
     return (r?.data?.searchV2?.topResultsV2?.itemsV2 ?? []).filter((i) => i.item?.__typename === "TrackResponseWrapper").map((i) => i.item.data);

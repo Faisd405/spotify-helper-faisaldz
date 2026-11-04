@@ -7,7 +7,13 @@
 
 (async function romajiLyrics() {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  while (!globalThis.Spicetify?.Player?.addEventListener || !Spicetify.Playbar?.Button || !Spicetify.LocalStorage || !Spicetify.CosmosAsync) await sleep(300);
+  // CosmosAsync can take minutes to appear after Spotify starts: awaited by the sources that use it.
+  while (!globalThis.Spicetify?.Player?.addEventListener || !Spicetify.Playbar?.Button || !Spicetify.LocalStorage) await sleep(300);
+  const cosmos = async () => {
+    for (let i = 0; i < 50 && !Spicetify.CosmosAsync; i++) await sleep(200);
+    if (!Spicetify.CosmosAsync) throw new Error("CosmosAsync belum siap");
+    return Spicetify.CosmosAsync;
+  };
   const { Player, LocalStorage: store } = Spicetify;
   const CFG = globalThis.LISTEN_ALONG_CONFIG ?? {};
   const L = globalThis.LA_LYRICS;
@@ -31,7 +37,7 @@
       return Array.isArray(lines) && lines.length ? { synced: true, lines, romanized: true } : null;
     },
     Spotify: async (t) => {
-      const b = await Spicetify.CosmosAsync.get(`https://spclient.wg.spotify.com/color-lyrics/v2/track/${t.id}?format=json&vocalRemoval=false&market=from_token`);
+      const b = await (await cosmos()).get(`https://spclient.wg.spotify.com/color-lyrics/v2/track/${t.id}?format=json&vocalRemoval=false&market=from_token`);
       const l = b?.lyrics;
       if (!l?.lines?.length) return null;
       const synced = l.syncType === "LINE_SYNCED";
@@ -50,7 +56,7 @@
     // Often blocked: genius.com answers 403 to non-browser clients (Oct 2026), and so fails in lyrics-plus too.
     Genius: async (t) => {
       const q = new URLSearchParams({ per_page: 10, q: `${t.artist} ${t.title.replace(/\s*[([-].*$/, "")}` });
-      const hits = (await Spicetify.CosmosAsync.get(`https://genius.com/api/search/song?${q}`))?.response?.sections?.[0]?.hits ?? [];
+      const hits = (await (await cosmos()).get(`https://genius.com/api/search/song?${q}`))?.response?.sections?.[0]?.hits ?? [];
       // Only trust a hit by the same artist: a wrong song is worse than none.
       const hit = hits.map((x) => x.result).find((r) => r?.primary_artist?.name?.toLowerCase().includes(t.artist.toLowerCase()) || t.artist.toLowerCase().includes(r?.primary_artist?.name?.toLowerCase() ?? "\0"));
       if (!hit?.url) return null;
