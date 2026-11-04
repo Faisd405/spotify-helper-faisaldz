@@ -38,6 +38,8 @@ type App struct {
 	dir         string
 	fb          *Firebase
 	sp          *Spotify
+	local       *Local
+	cfg         Config
 	mu          sync.Mutex
 	room        string
 	following   bool
@@ -51,6 +53,24 @@ type App struct {
 	wake        chan struct{}
 	mStatus     *systray.MenuItem
 	mFollow     *systray.MenuItem
+}
+
+// Config is saved to config.json: the room to rejoin on start and where the music plays.
+type Config struct {
+	Room  string
+	Local bool // play from this app (go-librespot) instead of steering a Spotify app
+}
+
+func (a *App) saveConfig() { writeJSON(filepath.Join(a.dir, "config.json"), a.cfg) }
+
+// out is the player the sync loop drives.
+func (a *App) out() Backend {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.cfg.Local {
+		return a.local
+	}
+	return a.sp
 }
 
 func main() {
@@ -70,12 +90,18 @@ func main() {
 		following: true,
 		wake:      make(chan struct{}, 1),
 	}
-	var cfg struct{ Room string }
-	readJSON(filepath.Join(dir, "config.json"), &cfg)
+	readJSON(filepath.Join(dir, "config.json"), &a.cfg)
 	if flag.NArg() > 0 {
-		cfg.Room = parseCode(flag.Arg(0))
+		a.cfg.Room = parseCode(flag.Arg(0))
 	}
-	systray.Run(func() { a.onReady(cfg.Room) }, nil)
+	a.local = &Local{
+		dir:     filepath.Join(dir, "librespot"),
+		onLogin: func(u string) { a.setStatus("Login pemutar di browser (sekali saja)…"); openBrowser(u) },
+		onExit: func(err error) {
+			a.setStatus(fmt.Sprintf("Pemutar berhenti (%v): centang ulang \"Putar di aplikasi ini\"", err))
+		},
+	}
+	systray.Run(func() { a.onReady(a.cfg.Room) }, nil)
 }
 
 func (a *App) onReady(room string) {
@@ -86,6 +112,7 @@ func (a *App) onReady(room string) {
 	systray.AddSeparator()
 	mJoin := systray.AddMenuItem("Gabung room dari clipboard", "Salin kode atau link room dulu, lalu klik ini")
 	a.mFollow = systray.AddMenuItemCheckbox("Ikuti", "Hilangkan centang untuk memakai Spotify sendiri", true)
+	mLocal := systray.AddMenuItemCheckbox("Putar di aplikasi ini", "Musik keluar dari aplikasi ini (go-librespot, Premium). Tanpa centang: mengontrol Spotify Anda yang lain", a.cfg.Local)
 	mLeave := systray.AddMenuItem("Keluar room", "")
 	mLogin := systray.AddMenuItem("Login Spotify", "Buka login Spotify di browser")
 	systray.AddSeparator()
@@ -93,7 +120,9 @@ func (a *App) onReady(room string) {
 	if clientID == "" || dbURL == "" || apiKey == "" {
 		a.setStatus("Config kosong: build ulang dengan build.sh")
 	} else {
-		if !a.sp.dry && !a.sp.hasLogin() {
+		if a.cfg.Local {
+			go a.startLocal()
+		} else if !a.sp.dry && !a.sp.hasLogin() {
 			go a.login() // first start: needed before anything can follow
 		}
 		if room != "" {
@@ -112,12 +141,29 @@ func (a *App) onReady(room string) {
 				}
 			case <-a.mFollow.ClickedCh:
 				a.setFollowing(!a.mFollow.Checked(), "")
+			case <-mLocal.ClickedCh:
+				on := !mLocal.Checked()
+				if on {
+					mLocal.Check()
+				} else {
+					mLocal.Uncheck()
+					a.local.stop()
+				}
+				a.mu.Lock()
+				a.cfg.Local = on
+				a.mu.Unlock()
+				a.saveConfig()
+				if on {
+					go a.startLocal()
+				}
+				a.poke()
 			case <-mLogin.ClickedCh:
 				go a.login()
 			case <-mLeave.ClickedCh:
 				a.leave("Keluar dari room")
 			case <-mQuit.ClickedCh:
 				a.leave("")
+				a.local.stop()
 				systray.Quit()
 				return
 			}
@@ -204,6 +250,18 @@ func (a *App) displayName() string {
 	return name
 }
 
+func (a *App) startLocal() {
+	if _, err := os.Stat(a.local.exe()); err != nil {
+		a.setStatus("Mengunduh pemutar go-librespot (±5 MB)…")
+	}
+	if err := a.local.start(); err != nil {
+		a.setStatus("Pemutar: " + err.Error())
+		return
+	}
+	a.setStatus("Pemutar berjalan")
+	a.poke()
+}
+
 func (a *App) poke() {
 	select {
 	case a.wake <- struct{}{}:
@@ -217,7 +275,10 @@ func (a *App) join(code string) {
 	a.mu.Lock()
 	a.room, a.stop, a.track, a.checked = code, cancel, nil, false
 	a.mu.Unlock()
-	writeJSON(filepath.Join(a.dir, "config.json"), map[string]string{"Room": code})
+	a.mu.Lock()
+	a.cfg.Room = code
+	a.mu.Unlock()
+	a.saveConfig()
 	a.setStatus("Gabung ke room " + code + "…")
 	go a.streamLoop(ctx, code)
 	go a.presenceLoop(ctx, code)
@@ -236,7 +297,10 @@ func (a *App) leave(why string) {
 	stop()
 	go a.fb.leave(code)
 	if why != "" {
-		writeJSON(filepath.Join(a.dir, "config.json"), map[string]string{})
+		a.mu.Lock()
+		a.cfg.Room = ""
+		a.mu.Unlock()
+		a.saveConfig()
 		a.setStatus(why)
 	}
 }
@@ -273,7 +337,10 @@ func (a *App) presenceLoop(ctx context.Context, code string) {
 		var hostUID, hostName string
 		status, _ := a.fb.do("GET", "rooms/"+code+"/hostUid", nil, &hostUID) // "" = no such room
 		a.fb.do("GET", "rooms/"+code+"/host/name", nil, &hostName)
-		same := hostName != "" && a.sp.hasLogin() && strings.EqualFold(hostName, a.displayName())
+		a.mu.Lock()
+		local := a.cfg.Local
+		a.mu.Unlock()
+		same := !local && hostName != "" && a.sp.hasLogin() && strings.EqualFold(hostName, a.displayName())
 		a.mu.Lock()
 		a.sameAccount, a.checked, a.roomMissing = same, true, status == 200 && hostUID == ""
 		a.mu.Unlock()
@@ -299,6 +366,7 @@ func (a *App) syncLoop(ctx context.Context) {
 	var lastCmd, lastSeek, lastCheck, holdUntil time.Time
 	var aligned *Track // the room state Spotify was last lined up with
 	var nilSince time.Time
+	var lastOut Backend
 	// ms between sending a command and Spotify actually playing there. Learned from the first drift check
 	// after each of our play/seek commands (calibrate).
 	lead, calibrate := 400.0, false
@@ -314,6 +382,10 @@ func (a *App) syncLoop(ctx context.Context) {
 		a.mu.Lock()
 		t, following, same, checked := a.track, a.following, a.sameAccount, a.checked
 		a.mu.Unlock()
+		out := a.out()
+		if out != lastOut {
+			lastOut, appliedID, aligned = out, "", nil
+		}
 		if !checked {
 			continue
 		}
@@ -337,6 +409,8 @@ func (a *App) syncLoop(ctx context.Context) {
 				holdUntil = time.Now().Add(5 * time.Second)
 			}
 			switch err {
+			case errPlayerNotReady:
+				a.setStatus("Pemutar belum siap: selesaikan login di browser, atau tunggu sebentar")
 			case errNoDevice:
 				a.setStatus("Buka Spotify (PC atau HP) dulu")
 			case errNotRegistered:
@@ -358,7 +432,7 @@ func (a *App) syncLoop(ctx context.Context) {
 				continue
 			}
 			if appliedPlaying {
-				a.sp.pause()
+				out.pause()
 				appliedPlaying = false
 			}
 			appliedID = ""
@@ -376,10 +450,10 @@ func (a *App) syncLoop(ctx context.Context) {
 		if t.ID != appliedID || t.IsPlaying != appliedPlaying {
 			var err error
 			if t.ID != appliedID || t.IsPlaying {
-				err = a.sp.play(t.ID, int(t.predict(a.fb.serverNow())+lead))
+				err = out.play(t.ID, int(t.predict(a.fb.serverNow())+lead))
 			}
 			if err == nil && !t.IsPlaying {
-				err = a.sp.pause()
+				err = out.pause()
 			}
 			if err != nil {
 				fail(err)
@@ -391,7 +465,7 @@ func (a *App) syncLoop(ctx context.Context) {
 		}
 		// The host seeked (the room's position jumped): follow now instead of at the next drift check.
 		if now := a.fb.serverNow(); t.IsPlaying && aligned != nil && math.Abs(t.predict(now)-aligned.predict(now)) > 1000 {
-			if err := a.sp.seek(int(t.predict(now) + lead)); err != nil {
+			if err := out.seek(int(t.predict(now) + lead)); err != nil {
 				fail(err)
 				continue
 			}
@@ -403,7 +477,7 @@ func (a *App) syncLoop(ctx context.Context) {
 		}
 		lastCheck = time.Now()
 		sent := time.Now()
-		p, err := a.sp.player()
+		p, err := out.player()
 		if err != nil {
 			fail(err)
 			continue
@@ -427,7 +501,7 @@ func (a *App) syncLoop(ctx context.Context) {
 		}
 		calibrate = false
 		if math.Abs(drift) > 1200 && time.Since(lastSeek) > 6*time.Second {
-			if err := a.sp.seek(int(t.predict(a.fb.serverNow()) + lead)); err != nil {
+			if err := out.seek(int(t.predict(a.fb.serverNow()) + lead)); err != nil {
 				fail(err)
 				continue
 			}

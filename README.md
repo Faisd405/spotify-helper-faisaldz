@@ -97,5 +97,11 @@ Premium**, and the account must be added under User Management in the Developer 
   browser opens for the Spotify login. The room is remembered for the next start.
 - Sync: song changes, play/pause and host seeks are followed right away; every 4 s it checks Spotify's
   position and seeks if it is more than 1.2 s off (expect roughly ±0.3–1 s).
+- **Putar di aplikasi ini** (tray menu): the music comes out of the tray app itself instead of a Spotify
+  app. The tray downloads [go-librespot](https://github.com/devgianlu/go-librespot) `v0.10.5` (GPL-3.0, an
+  open-source Spotify Connect client) once from its official release, checks the release's SHA-256, runs it
+  hidden and drives it on `localhost:3678`. Needs Premium; its login uses Spotify's own client, so no
+  Developer Dashboard entry. It is an unofficial client: Spotify can refuse it ("audio key" errors) or break
+  it with an update. Use a different account than the host's (one account plays on one device at a time).
 - Test without Spotify: `ListenAlong.exe -dry CODE` logs the commands instead of sending them.
 - Log and saved logins: `%APPDATA%\ListenAlongApp`.
