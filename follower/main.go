@@ -45,6 +45,7 @@ type App struct {
 	status      string
 	name        string
 	sameAccount bool
+	roomMissing bool // the room doesn't exist (wrong code, or the host ended it)
 	checked     bool // account compared with the host at least once: no commands before that
 	stop        context.CancelFunc
 	wake        chan struct{}
@@ -269,11 +270,12 @@ func (a *App) presenceLoop(ctx context.Context, code string) {
 	for {
 		// The host's own account can't follow: one Spotify account plays on one device at a time, so we'd
 		// only be driving the host's player. Compared by display name (the room stores no Spotify user id).
-		var host string
-		a.fb.do("GET", "rooms/"+code+"/host/name", nil, &host)
-		same := host != "" && a.sp.hasLogin() && strings.EqualFold(host, a.displayName())
+		var hostUID, hostName string
+		status, _ := a.fb.do("GET", "rooms/"+code+"/hostUid", nil, &hostUID) // "" = no such room
+		a.fb.do("GET", "rooms/"+code+"/host/name", nil, &hostName)
+		same := hostName != "" && a.sp.hasLogin() && strings.EqualFold(hostName, a.displayName())
 		a.mu.Lock()
-		a.sameAccount, a.checked = same, true
+		a.sameAccount, a.checked, a.roomMissing = same, true, status == 200 && hostUID == ""
 		a.mu.Unlock()
 		if err := a.fb.heartbeat(code, a.displayName()); err == errKicked {
 			a.leave("Anda di-kick dari room " + code)
@@ -360,7 +362,14 @@ func (a *App) syncLoop(ctx context.Context) {
 				appliedPlaying = false
 			}
 			appliedID = ""
-			a.setStatus("Menunggu host memutar lagu")
+			a.mu.Lock()
+			missing := a.roomMissing
+			a.mu.Unlock()
+			if missing {
+				a.setStatus("Room " + a.room + " tidak ada atau sudah diakhiri host. Salin kode yang baru")
+			} else {
+				a.setStatus("Menunggu host memutar lagu")
+			}
 			continue
 		}
 		nilSince = time.Time{}
