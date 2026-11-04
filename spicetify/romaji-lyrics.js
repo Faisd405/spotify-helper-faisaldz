@@ -14,7 +14,10 @@
     if (!Spicetify.CosmosAsync) throw new Error("CosmosAsync belum siap");
     return Spicetify.CosmosAsync;
   };
-  const { Player, LocalStorage: store } = Spicetify;
+  // Spicetify replaces Spicetify.Player once Spotify has finished starting, so never keep a reference to an
+  // early one (it stays empty: no track, no events). This always reads the current object.
+  const Player = new Proxy({}, { get: (_, k) => { const p = Spicetify.Player, v = p[k]; return typeof v === "function" ? v.bind(p) : v; } });
+  const store = Spicetify.LocalStorage;
   const CFG = globalThis.LISTEN_ALONG_CONFIG ?? {};
   const L = globalThis.LA_LYRICS;
 
@@ -290,6 +293,11 @@
 
   function tick() {
     if (!page) return;
+    // Song changed (polled: a "songchange" listener can end up on a Player object Spicetify replaced).
+    if (trackId(Player.data?.item?.uri) !== shownId) {
+      source = null;
+      show();
+    }
     if (synced && lines.length) {
       const pos = Player.getProgress() + opts.offset;
       const idx = lines.findLastIndex((l) => l.timeMs <= pos);
@@ -313,10 +321,6 @@
     if (next.id && !localStorage.getItem(KEY(next.id))) get(next).catch(() => {});
   }
 
-  Player.addEventListener("songchange", () => {
-    source = null;
-    if (page) show();
-  });
   Spicetify.Platform?.History?.listen?.(() => close()); // navigating elsewhere leaves the lyrics page
 
   const ICON = `<svg viewBox="0 0 16 16" fill="currentColor"><path d="M2 3h12v1.5H2zm0 4h8v1.5H2zm0 4h10v1.5H2z"/><text x="11.2" y="10" font-size="6" font-weight="700">あ</text></svg>`;

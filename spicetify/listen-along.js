@@ -15,7 +15,10 @@
 
   const CFG = globalThis.LISTEN_ALONG_CONFIG;
   if (!CFG?.dbUrl || !CFG?.apiKey) return notify("Listen Along: config kosong, download ulang file-nya dari situs.", true);
-  const { Player, LocalStorage: store } = Spicetify;
+  // Spicetify replaces Spicetify.Player once Spotify has finished starting, so never keep a reference to an
+  // early one (it stays empty: no track, no events). This always reads the current object.
+  const Player = new Proxy({}, { get: (_, k) => { const p = Spicetify.Player, v = p[k]; return typeof v === "function" ? v.bind(p) : v; } });
+  const store = Spicetify.LocalStorage;
 
   // ---------- Firebase over REST ----------
 
@@ -33,6 +36,7 @@
     let next;
     if (saved) {
       const j = await (await fetch(`https://securetoken.googleapis.com/v1/token?key=${CFG.apiKey}`, {
+        signal: AbortSignal.timeout(10_000),
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: new URLSearchParams({ grant_type: "refresh_token", refresh_token: saved.refreshToken }),
@@ -41,6 +45,7 @@
     }
     if (!next) {
       const j = await (await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${CFG.apiKey}`, {
+        signal: AbortSignal.timeout(10_000),
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ returnSecureToken: true }),
@@ -55,7 +60,9 @@
   // Returns { status, data }. data is the JSON body (null on errors).
   async function db(path, method = "GET", body) {
     const auth = await getAuth();
-    const res = await fetch(`${CFG.dbUrl}/${path}.json?auth=${auth.idToken}`, { method, body: body === undefined ? undefined : JSON.stringify(body) });
+    // A deadline on every request: one that never answers (flaky network) would otherwise block its caller
+    // for good, e.g. leave publish() locked so the host stops sending the track.
+    const res = await fetch(`${CFG.dbUrl}/${path}.json?auth=${auth.idToken}`, { method, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(10_000) });
     return { status: res.status, data: await res.json().catch(() => null) };
   }
   const TS = { ".sv": "timestamp" };
@@ -135,12 +142,15 @@
   }
 
   let me = null; // { name, avatar }
+  // Right after Spotify starts, getUser() can stay pending forever: give up after 3 s and use a placeholder
+  // without caching it, so the real name is picked up on a later call.
   async function myProfile() {
     if (me) return me;
-    const user = await Spicetify.Platform?.UserAPI?.getUser?.().catch(() => null);
+    const user = await Promise.race([Spicetify.Platform?.UserAPI?.getUser?.(), sleep(3000)]).catch(() => null);
     const avatar = user?.images?.find?.((i) => i.url?.startsWith("https://"))?.url ?? null;
-    me = { name: (user?.displayName || user?.username || "Pendengar (Spotify)").slice(0, 40), avatar };
-    return me;
+    const profile = { name: (user?.displayName || user?.username || "Pendengar (Spotify)").slice(0, 40), avatar };
+    if (user) me = profile;
+    return profile;
   }
   const myName = async () => store.get("la:name") || (await myProfile()).name;
 
@@ -940,6 +950,10 @@
         h("summary", { className: "la-h", textContent: "Pengaturan room ▾" }),
         toggle("Tamu boleh mengontrol pemutaran", "guestControl"),
         toggle("Lagu dari tamu perlu disetujui", "approval"),
+        btn("Izinkan lagi semua yang di-kick", async () => {
+          await db(`kicked/${code}`, "DELETE");
+          say("Semua yang di-kick boleh gabung lagi.");
+        }, "la-btn sec"),
       );
       set.ontoggle = () => (set.open ? store.set("la:set-open", "1") : store.remove("la:set-open"));
       body.append(set);
